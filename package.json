@@ -1,9 +1,14 @@
 {
   "name": "aetheris-rs",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "God-Tier Cross-Platform Telemetry (Hardware, AI Observability, Hybrid Egress, Predictive Analytics)",
+  "author": "The 40 Thieves",
   "type": "module",
   "scripts": {
+    "start": "tauri dev",
+    "dev": "tauri dev",
+    "build": "tauri build",
     "tauri": "tauri"
   },
   "devDependencies": {
