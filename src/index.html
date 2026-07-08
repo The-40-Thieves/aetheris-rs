@@ -37,6 +37,34 @@
               <span class="value" id="uptime">--:--:--</span>
             </div>
           </div>
+        <!-- Processes & Sensors Panel -->
+        <section class="glass-panel card col-span-2">
+          <h2>Processes & Sensors</h2>
+          <div class="dashboard-grid" style="padding-right: 0; gap: 1rem;">
+              <div class="metric-group">
+                <h3>Top Processes (CPU)</h3>
+                <div class="table-container">
+                  <table>
+                    <thead>
+                      <tr><th>PID</th><th>Name</th><th>CPU %</th><th>Mem %</th></tr>
+                    </thead>
+                    <tbody id="processes-body">
+                      <tr><td colspan="4" class="empty-state">Loading processes...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="metric-group">
+                <h3>Hardware Sensors (Temp & Fans)</h3>
+                <div class="table-container scrollable">
+                  <table>
+                    <tbody id="sensors-body">
+                      <tr><td class="empty-state">Loading sensors...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+          </div>
         </section>
 
         <!-- GPU & AI Panel -->

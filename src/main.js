@@ -12,19 +12,54 @@ function formatBytes(bytes, decimals = 2) {
 function updateDOM() {
     invoke("get_stats").then((stats) => {
         // --- Overview ---
-        let totalMem = stats.memory.total_memory || 0;
-        let usedMem = stats.memory.used_memory || 0;
+        let totalMem = stats.static.mem.total || 0;
+        let usedMem = stats.dynamic.mem.used || 0;
         let memPercent = totalMem > 0 ? (usedMem / totalMem) * 100 : 0;
         
-        document.getElementById('cpu-usage').innerText = `${stats.cpu.global_usage.toFixed(1)}%`;
-        document.getElementById('cpu-bar').style.width = `${stats.cpu.global_usage}%`;
-        document.getElementById('cpu-bar').className = `fill ${stats.cpu.global_usage > 85 ? 'danger' : stats.cpu.global_usage > 60 ? 'warning' : ''}`;
+        document.getElementById('cpu-usage').innerText = `${stats.dynamic.cpu.currentLoad.toFixed(1)}%`;
+        document.getElementById('cpu-bar').style.width = `${stats.dynamic.cpu.currentLoad}%`;
+        document.getElementById('cpu-bar').className = `fill ${stats.dynamic.cpu.currentLoad > 85 ? 'danger' : stats.dynamic.cpu.currentLoad > 60 ? 'warning' : ''}`;
 
         document.getElementById('mem-usage').innerText = `${formatBytes(usedMem)} / ${formatBytes(totalMem)}`;
         document.getElementById('mem-bar').style.width = `${memPercent}%`;
         document.getElementById('mem-bar').className = `fill ${memPercent > 85 ? 'danger' : memPercent > 60 ? 'warning' : ''}`;
 
-        document.getElementById('uptime').innerText = `${Math.floor(stats.uptime / 3600)}h ${Math.floor((stats.uptime % 3600)/60)}m`;
+        document.getElementById('uptime').innerText = `${Math.floor(stats.dynamic.uptime / 3600)}h ${Math.floor((stats.dynamic.uptime % 3600)/60)}m`;
+
+        // --- Processes ---
+        let procHtml = '';
+        if (stats.dynamic.processes && stats.dynamic.processes.listCpu) {
+            stats.dynamic.processes.listCpu.forEach(p => {
+                procHtml += `
+                    <tr>
+                        <td>${p.pid}</td>
+                        <td>${p.name}</td>
+                        <td style="color: ${p.cpu > 50 ? 'var(--danger)' : 'inherit'}">${p.cpu.toFixed(1)}%</td>
+                        <td>${p.mem.toFixed(1)}%</td>
+                    </tr>
+                `;
+            });
+        }
+        document.getElementById('processes-body').innerHTML = procHtml || `<tr><td colspan="4">No process data</td></tr>`;
+
+        // --- Sensors ---
+        let sensorHtml = '';
+        if (stats.dynamic.extras && stats.dynamic.extras.sensors) {
+            stats.dynamic.extras.sensors.forEach(s => {
+                let color = s.temp > (s.critical || 90) ? 'var(--danger)' : s.temp > (s.max || 80) ? 'var(--warning)' : 'inherit';
+                sensorHtml += `
+                    <tr>
+                        <td>${s.label}</td>
+                        <td style="color: ${color}">${s.temp.toFixed(1)}°C</td>
+                        <td><span class="label" style="font-size: 0.75rem">Max: ${s.max || '--'}</span></td>
+                    </tr>
+                `;
+            });
+            if (stats.dynamic.extras.sensors.length === 0) {
+                sensorHtml = `<tr><td class="empty-state">No sensors detected</td></tr>`;
+            }
+        }
+        document.getElementById('sensors-body').innerHTML = sensorHtml;
 
         // --- GPU ---
         let gpuHtml = '';
