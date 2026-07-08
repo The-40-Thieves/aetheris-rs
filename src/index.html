@@ -33,6 +33,15 @@
               <div class="progress-bar"><div class="fill" id="mem-bar"></div></div>
             </div>
             <div class="metric">
+              <span class="label">SWAP</span>
+              <span class="value" id="swap-usage">-- GB / -- GB</span>
+              <div class="progress-bar"><div class="fill" id="swap-bar" style="background-color: var(--warning)"></div></div>
+            </div>
+            <div class="metric">
+              <span class="label">Network I/O</span>
+              <span class="value" id="net-io">↓ 0 B/s | ↑ 0 B/s</span>
+            </div>
+            <div class="metric">
               <span class="label">System Uptime</span>
               <span class="value" id="uptime">--:--:--</span>
             </div>
@@ -46,10 +55,10 @@
                 <div class="table-container">
                   <table>
                     <thead>
-                      <tr><th>PID</th><th>Name</th><th>CPU %</th><th>Mem %</th></tr>
+                      <tr><th>PID</th><th>Name</th><th>CPU %</th><th>Mem %</th><th>Disk I/O</th></tr>
                     </thead>
                     <tbody id="processes-body">
-                      <tr><td colspan="4" class="empty-state">Loading processes...</td></tr>
+                      <tr><td colspan="5" class="empty-state">Loading processes...</td></tr>
                     </tbody>
                   </table>
                 </div>

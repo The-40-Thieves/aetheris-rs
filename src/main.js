@@ -24,6 +24,23 @@ function updateDOM() {
         document.getElementById('mem-bar').style.width = `${memPercent}%`;
         document.getElementById('mem-bar').className = `fill ${memPercent > 85 ? 'danger' : memPercent > 60 ? 'warning' : ''}`;
 
+        let swapTotal = stats.dynamic.mem.swaptotal || 0;
+        let swapUsed = stats.dynamic.mem.swapused || 0;
+        let swapPercent = swapTotal > 0 ? (swapUsed / swapTotal) * 100 : 0;
+        document.getElementById('swap-usage').innerText = `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`;
+        document.getElementById('swap-bar').style.width = `${swapPercent}%`;
+        document.getElementById('swap-bar').className = `fill ${swapPercent > 85 ? 'danger' : swapPercent > 40 ? 'warning' : ''}`;
+        
+        let netRx = 0;
+        let netTx = 0;
+        if (stats.dynamic.network) {
+            stats.dynamic.network.forEach(n => {
+                netRx += n.rx_sec;
+                netTx += n.tx_sec;
+            });
+        }
+        document.getElementById('net-io').innerText = `↓ ${formatBytes(netRx)}/s | ↑ ${formatBytes(netTx)}/s`;
+
         document.getElementById('uptime').innerText = `${Math.floor(stats.dynamic.uptime / 3600)}h ${Math.floor((stats.dynamic.uptime % 3600)/60)}m`;
 
         // --- Processes ---
@@ -36,6 +53,7 @@ function updateDOM() {
                         <td>${p.name}</td>
                         <td style="color: ${p.cpu > 50 ? 'var(--danger)' : 'inherit'}">${p.cpu.toFixed(1)}%</td>
                         <td>${p.mem.toFixed(1)}%</td>
+                        <td><span style="font-size:0.75rem">R: ${formatBytes(p.disk_r)}/s <br> W: ${formatBytes(p.disk_w)}/s</span></td>
                     </tr>
                 `;
             });

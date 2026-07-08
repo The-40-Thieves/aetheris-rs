@@ -175,6 +175,8 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
             "name": p.name().to_string_lossy(),
             "cpu": (p.cpu_usage() * 10.0).round() / 10.0,
             "mem": (p.memory() as f64 / total_mem as f64 * 100.0).round() / 10.0,
+            "disk_r": p.disk_usage().read_bytes,
+            "disk_w": p.disk_usage().written_bytes,
             "state": format!("{:?}", p.status()),
             "user": p.user_id().map(|u| u.to_string()).unwrap_or_default()
         })
@@ -187,6 +189,8 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
             "name": p.name().to_string_lossy(),
             "cpu": (p.cpu_usage() * 10.0).round() / 10.0,
             "mem": (p.memory() as f64 / total_mem as f64 * 100.0).round() / 10.0,
+            "disk_r": p.disk_usage().read_bytes,
+            "disk_w": p.disk_usage().written_bytes,
             "state": format!("{:?}", p.status()),
             "user": p.user_id().map(|u| u.to_string()).unwrap_or_default()
         })
