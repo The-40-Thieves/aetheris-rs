@@ -26,4 +26,9 @@ sysinfo = "0.39.5"
 reqwest = "0.13.4"
 tokio = "1.52.3"
 which = "8.0.4"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+chrono = "0.4.45"
+axum = "0.8.9"
+starship-battery = "0.11.1"
+tauri-plugin-shell = "2.3.5"
 

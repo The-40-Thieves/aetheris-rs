@@ -8,11 +8,19 @@ use sysinfo::{
     System, Networks, Disks, Components,
 };
 
+mod database;
+mod monitors;
+mod analytics;
+mod server;
+
+use std::sync::Arc;
+
 struct AppState {
     sys: Mutex<System>,
     networks: Mutex<Networks>,
     disks: Mutex<Disks>,
     components: Mutex<Components>,
+    db: Arc<database::Database>,
 }
 
 fn detect_ais(sys: &System) -> Vec<serde_json::Value> {
@@ -284,6 +292,21 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
                 "toolchains": detect_toolchains(),
                 "vpns": scan_vpn_mesh(&sys),
                 "apps": scan_applications(),
+                "gpus": monitors::gpu::get_gpu_stats(),
+                "smartDisks": monitors::smart_disk::get_smart_data().into_iter().map(|mut disk| {
+                    let model = disk["model"].as_str().unwrap_or("Unknown").to_string();
+                    let bw = disk["bytesWritten"].as_f64().unwrap_or(0.0);
+                    disk["rul"] = analytics::rul::calculate_ssd_rul(&state.db, &model, bw);
+                    disk
+                }).collect::<Vec<_>>(),
+                "batteries": monitors::battery::get_battery_stats().into_iter().map(|mut batt| {
+                    let soh = batt["stateOfHealth"].as_f64().unwrap_or(100.0);
+                    let cc = batt["cycleCount"].as_i64().unwrap_or(0) as i32;
+                    batt["rul"] = analytics::rul::calculate_battery_rul(&state.db, soh, cc);
+                    batt
+                }).collect::<Vec<_>>(),
+                "egressTopology": monitors::network_topology::get_egress_topology(&state.db),
+                "externalBaselines": monitors::external_baselines::get_external_baselines(&state.db),
                 "plur": {},
                 "containers": [],
                 "outpostStats": {}
@@ -293,12 +316,22 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
 }
 
 fn main() {
+    let db = Arc::new(database::Database::new(std::path::PathBuf::from("aetheris_telemetry.db")).expect("Failed to initialize local SQLite database"));
+    let db_clone = db.clone();
+
     tauri::Builder::default()
+        .setup(move |_app| {
+            tauri::async_runtime::spawn(async move {
+                server::start_server(db_clone).await;
+            });
+            Ok(())
+        })
         .manage(AppState {
             sys: Mutex::new(System::new_all()),
             networks: Mutex::new(Networks::new_with_refreshed_list()),
             disks: Mutex::new(Disks::new_with_refreshed_list()),
             components: Mutex::new(Components::new_with_refreshed_list()),
+            db,
         })
         .invoke_handler(tauri::generate_handler![get_stats])
         .run(tauri::generate_context!())
