@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AETHERIS // System Intelligence Dashboard</title>
+  <!-- Google Fonts Outfit & JetBrains Mono for a sleek developer/cybernetic vibe -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <!-- Animated Background Orbs -->
+  <div class="bg-orb-container">
+    <div class="bg-orb orb-cyan"></div>
+    <div class="bg-orb orb-violet"></div>
+    <div class="bg-orb orb-blue"></div>
+  </div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header glass-card">
+      <div class="brand">
+        <div class="logo-icon"></div>
+        <div class="brand-text">
+          <h1>AETHERIS <span class="version-tag">v1.0.0</span></h1>
+          <p class="subtitle">REAL-TIME SYSTEM INTELLIGENCE & METRICS</p>
+        </div>
+      </div>
+      <div class="system-meta">
+        <div class="meta-item">
+          <span class="meta-label">HOST</span>
+          <span class="meta-value" id="host-name">LOADING...</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">OS</span>
+          <span class="meta-value" id="os-info">LOADING...</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">KERNEL</span>
+          <span class="meta-value" id="kernel-info">LOADING...</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">UPTIME</span>
+          <span class="meta-value" id="uptime-val">0h 0m</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">CPU</span>
+          <span class="meta-value" id="cpu-brand">LOADING...</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">STATUS</span>
+          <span class="status-indicator active" id="system-status">ONLINE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="dashboard-grid">
+      
+      <!-- Hardware & Specs -->
+      <section class="glass-card monitor-card span-columns-2" id="hw-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">💻</span>
+            <h2>HARDWARE & FIRMWARE</h2>
+          </div>
+        </div>
+        <div class="env-layout-grid">
+          <div class="env-column">
+            <h3 class="section-subheading">PLATFORM</h3>
+            <div class="metric-details" style="margin-top: 8px;">
+              <div class="metric-row"><span>Manufacturer</span> <span class="value-highlight" id="sys-mfg">Loading...</span></div>
+              <div class="metric-row"><span>Model</span> <span class="value-highlight" id="sys-model">Loading...</span></div>
+              <div class="metric-row"><span>Virtual</span> <span class="value-highlight" id="sys-virtual">Loading...</span></div>
+            </div>
+          </div>
+          <div class="env-column">
+            <h3 class="section-subheading">FIRMWARE</h3>
+            <div class="metric-details" style="margin-top: 8px;">
+              <div class="metric-row"><span>BIOS Vendor</span> <span class="value-highlight" id="bios-vendor" style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="">Loading...</span></div>
+              <div class="metric-row"><span>BIOS Version</span> <span class="value-highlight" id="bios-version">Loading...</span></div>
+              <div class="metric-row"><span>Baseboard</span> <span class="value-highlight" id="board-model">Loading...</span></div>
+            </div>
+          </div>
+          <div class="env-column">
+            <h3 class="section-subheading">CPU FEATURES</h3>
+            <div class="metric-details" style="margin-top: 8px;">
+              <div class="metric-row"><span>Base Speed</span> <span class="value-highlight" id="cpu-speed">Loading...</span></div>
+              <div class="metric-row"><span>Virtualization</span> <span class="value-highlight" id="cpu-virt">Loading...</span></div>
+              <div class="metric-row"><span>Flags</span> <span class="value-highlight" id="cpu-flags" style="font-size: 0.7rem; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="">Loading...</span></div>
+            </div>
+          </div>
+          <div class="env-column">
+            <h3 class="section-subheading">HARDWARE SENSORS</h3>
+            <div class="metric-details" id="sensors-container" style="margin-top: 8px;">
+              <div class="loading-placeholder">Detecting sensors...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- CPU Monitor -->
+      <section class="glass-card monitor-card" id="cpu-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">💻</span>
+            <h2>CPU LOAD</h2>
+          </div>
+          <div class="card-actions">
+            <span class="live-badge">LIVE</span>
+          </div>
+        </div>
+        <div class="card-content cpu-layout">
+          <!-- Main Circle and Stats -->
+          <div class="radial-progress-container">
+            <svg class="radial-svg" viewBox="0 0 100 100">
+              <circle class="radial-bg" cx="50" cy="50" r="40"></circle>
+              <circle class="radial-progress path-cyan" cx="50" cy="50" r="40" id="cpu-radial"></circle>
+            </svg>
+            <div class="radial-text">
+              <span class="value" id="cpu-val-percent">0%</span>
+              <span class="label">TOTAL LOAD</span>
+            </div>
+          </div>
+          
+          <!-- Detailed Load Stats -->
+          <div class="metric-details">
+            <div class="metric-row">
+              <span>User Space</span>
+              <span class="value-highlight" id="cpu-user-val">0%</span>
+            </div>
+            <div class="metric-row">
+              <span>System Space</span>
+              <span class="value-highlight" id="cpu-system-val">0%</span>
+            </div>
+            <div class="metric-row">
+              <span>Physical Cores</span>
+              <span class="value-highlight" id="cpu-cores-val">0</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Core-by-Core Load Breakdown -->
+        <div class="cores-container">
+          <h3 class="section-subheading">CORE UTILIZATION</h3>
+          <div class="cores-grid" id="cores-grid-data">
+            <!-- Cores will be injected here dynamically -->
+          </div>
+        </div>
+
+        <!-- CPU Real-time Trend Graph -->
+        <div class="chart-container">
+          <h3 class="section-subheading">LOAD HISTORY (60s)</h3>
+          <svg class="trend-chart" id="cpu-trend" viewBox="0 0 500 100" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="cpu-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--cyan-neon)" stop-opacity="0.3"></stop>
+                <stop offset="100%" stop-color="var(--cyan-neon)" stop-opacity="0.0"></stop>
+              </linearGradient>
+            </defs>
+            <path class="chart-area" fill="url(#cpu-grad)" d="M 0 100 L 0 100 Z"></path>
+            <path class="chart-line stroke-cyan" fill="none" stroke-width="2" d="M 0 100 L 500 100"></path>
+          </svg>
+        </div>
+      </section>
+
+      <!-- Memory Monitor -->
+      <section class="glass-card monitor-card" id="mem-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🧠</span>
+            <h2>MEMORY ALLOCATION</h2>
+          </div>
+          <div class="card-actions">
+            <span class="live-badge">LIVE</span>
+          </div>
+        </div>
+        <div class="card-content mem-layout">
+          <!-- Main Circle and Stats -->
+          <div class="radial-progress-container">
+            <svg class="radial-svg" viewBox="0 0 100 100">
+              <circle class="radial-bg" cx="50" cy="50" r="40"></circle>
+              <circle class="radial-progress path-violet" cx="50" cy="50" r="40" id="mem-radial"></circle>
+            </svg>
+            <div class="radial-text">
+              <span class="value" id="mem-val-percent">0%</span>
+              <span class="label">ACTIVE MEM</span>
+            </div>
+          </div>
+
+          <!-- Detailed Mem Stats -->
+          <div class="metric-details">
+            <div class="metric-row">
+              <span>Total Installed</span>
+              <span class="value-highlight" id="mem-total-val">0 GB</span>
+            </div>
+            <div class="metric-row">
+              <span>Used Memory</span>
+              <span class="value-highlight" id="mem-used-val">0 GB</span>
+            </div>
+            <div class="metric-row">
+              <span>Free / Cache</span>
+              <span class="value-highlight" id="mem-free-val">0 GB</span>
+            </div>
+            <div class="metric-row" style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+              <span>Swap Usage</span>
+              <span class="value-highlight" id="mem-swap-val">0 GB / 0 GB</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- RAM Real-time Trend Graph -->
+        <div class="chart-container">
+          <h3 class="section-subheading">MEMORY HISTORY (60s)</h3>
+          <svg class="trend-chart" id="mem-trend" viewBox="0 0 500 100" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="mem-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--violet-neon)" stop-opacity="0.3"></stop>
+                <stop offset="100%" stop-color="var(--violet-neon)" stop-opacity="0.0"></stop>
+              </linearGradient>
+            </defs>
+            <path class="chart-area" fill="url(#mem-grad)" d="M 0 100 L 0 100 Z"></path>
+            <path class="chart-line stroke-violet" fill="none" stroke-width="2" d="M 0 100 L 500 100"></path>
+          </svg>
+        </div>
+      </section>
+
+      <!-- Disks & Network -->
+      <div class="flex-column-gap">
+        <!-- Disks -->
+        <section class="glass-card monitor-card flex-grow-1" id="disk-card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">💾</span>
+              <h2>STORAGE DEVICES</h2>
+            </div>
+          </div>
+          <div class="card-content-full scrollable-panel" id="disks-container">
+            <!-- Disks listed dynamically here -->
+            <div class="loading-placeholder">Scanning storage sectors...</div>
+          </div>
+        </section>
+
+        <!-- Network -->
+        <section class="glass-card monitor-card" id="network-card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">🌐</span>
+              <h2>NETWORK THROUGHPUT</h2>
+            </div>
+          </div>
+          <div class="card-content network-grid" id="network-container">
+            <!-- Network interfaces listed here dynamically -->
+            <div class="loading-placeholder">Mapping network interfaces...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Hetzner VPS Monitor -->
+      <section class="glass-card monitor-card" id="outpost-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">☁️</span>
+            <h2>THE 40 THIEVES OUTPOST</h2>
+          </div>
+          <div class="card-actions">
+            <span class="status-indicator warning" id="outpost-status">CHECKING</span>
+          </div>
+        </div>
+        <div class="card-content outpost-layout">
+          <div class="outpost-grid">
+            <div class="outpost-metric">
+              <span class="metric-label">CPU LOAD</span>
+              <div class="progress-bar-container">
+                <div class="progress-fill" id="outpost-cpu-bar" style="width: 0%"></div>
+              </div>
+              <div class="metric-info-row">
+                <span id="outpost-cpu-val">0%</span>
+                <span class="text-muted" id="outpost-loadavg">load: 0.00, 0.00, 0.00</span>
+              </div>
+            </div>
+            
+            <div class="outpost-metric">
+              <span class="metric-label">MEMORY ALLOCATION</span>
+              <div class="progress-bar-container">
+                <div class="progress-fill violet" id="outpost-mem-bar" style="width: 0%"></div>
+              </div>
+              <div class="metric-info-row">
+                <span id="outpost-mem-val">0% (0 GB / 0 GB)</span>
+              </div>
+            </div>
+
+            <div class="outpost-metric">
+              <span class="metric-label">STORAGE CAPACITY</span>
+              <div class="progress-bar-container">
+                <div class="progress-fill orange" id="outpost-disk-bar" style="width: 0%"></div>
+              </div>
+              <div class="metric-info-row">
+                <span id="outpost-disk-val">0% (0.0 GB / 0.0 GB)</span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="chart-container" style="margin-top: auto; padding-top: 8px;">
+            <h3 class="section-subheading">CPU LOAD HISTORY (60s)</h3>
+            <svg class="trend-chart" id="outpost-cpu-trend" viewBox="0 0 500 100" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="outpost-cpu-grad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--cyan-neon)" stop-opacity="0.3"></stop>
+                  <stop offset="100%" stop-color="var(--cyan-neon)" stop-opacity="0.0"></stop>
+                </linearGradient>
+              </defs>
+              <path class="chart-area" fill="url(#outpost-cpu-grad)" d="M 0 100 L 0 100 Z"></path>
+              <path class="chart-line stroke-cyan" fill="none" stroke-width="2" d="M 0 100 L 500 100"></path>
+            </svg>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- Processes -->
+      <section class="glass-card monitor-card span-columns-2" id="procs-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">⚙️</span>
+            <h2>PROCESS EXPLORER</h2>
+            <div class="proc-tabs" style="display: flex; gap: 8px; margin-left: 16px;">
+              <button id="tab-cpu" class="tab-btn active">TOP CPU</button>
+              <button id="tab-mem" class="tab-btn">TOP MEMORY</button>
+            </div>
+          </div>
+          <div class="card-stats">
+            <span class="badge">Total Procs: <strong id="total-procs-val">0</strong></span>
+            <span class="badge badge-green">Running: <strong id="running-procs-val">0</strong></span>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="processes-table">
+            <thead>
+              <tr>
+                <th>PID</th>
+                <th>PROCESS NAME</th>
+                <th>CPU %</th>
+                <th>MEM %</th>
+                <th>STATE</th>
+                <th>USER</th>
+              </tr>
+            </thead>
+            <tbody id="processes-tbody">
+              <tr>
+                <td colspan="6" class="center-text">Acquiring process list...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Docker Observability -->
+      <section class="glass-card monitor-card span-columns-2" id="docker-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🐋</span>
+            <h2>DOCKER OBSERVABILITY (CAVE & OUTPOST)</h2>
+          </div>
+          <div class="card-actions">
+            <span class="live-badge">DOCKER CLUSTER</span>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="processes-table">
+            <thead>
+              <tr>
+                <th>NODE</th>
+                <th>CONTAINER ID</th>
+                <th>NAME</th>
+                <th>IMAGE</th>
+                <th>STATUS</th>
+              </tr>
+            </thead>
+            <tbody id="docker-tbody">
+              <tr>
+                <td colspan="5" class="center-text">Mapping container services...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Environments and Cluster Services -->
+      <section class="glass-card monitor-card span-columns-2" id="env-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🌌</span>
+            <h2>WORKSPACE INTELLIGENCE</h2>
+          </div>
+        </div>
+        <div class="env-layout-grid">
+          <!-- Column 1: VPN & Mesh -->
+          <div class="env-column">
+            <h3 class="section-subheading">VPN & MESH NETWORKS</h3>
+            <div class="tailscale-list" id="vpn-mesh-container">
+              <div class="loading-placeholder">Resolving mesh network...</div>
+            </div>
+          </div>
+          <!-- Column 2: Languages -->
+          <div class="env-column">
+            <h3 class="section-subheading">LANGUAGE TOOLCHAINS</h3>
+            <div class="languages-grid" id="languages-grid-container">
+              <div class="loading-placeholder">Detecting compilers...</div>
+            </div>
+          </div>
+          <!-- Column 3: AI Systems -->
+          <div class="env-column">
+            <h3 class="section-subheading">AI SYSTEMS DETECTED</h3>
+            <div class="plur-status-container" id="ai-systems-container">
+              <div class="loading-placeholder">Scanning for AIs...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Application Discovery -->
+      <section class="glass-card monitor-card span-columns-2" id="apps-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">📦</span>
+            <h2>INSTALLED APPLICATIONS</h2>
+          </div>
+        </div>
+        <div class="card-content-full scrollable-panel" style="max-height: 250px;">
+          <div class="apps-grid" id="apps-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding: 12px;">
+            <div class="loading-placeholder">Scanning OS applications...</div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>Aetheris System Intelligence • Refreshes every 2 seconds • Click stats to trigger micro-refresh</p>
+    </footer>
+  </div>
+
+  <script src="index.js"></script>
+</body>
+</html>
