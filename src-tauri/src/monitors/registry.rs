@@ -1,12 +1,6 @@
 //! Registry v2 image-update detection via manifest-digest comparison.
-//!
-//! Pure parsers land first (this task); the HTTP client that fetches
-//! manifest digests and the poller that wires this into `Container` land in
-//! later tasks on this branch. Until then these are unused from the crate's
-//! perspective, hence the `dead_code` allows.
 
 #[derive(Debug, PartialEq)]
-#[allow(dead_code)] // constructed by parse_image_ref, consumed by the manifest client in Task 6
 pub struct ImageRef {
     pub registry: String,   // host used for the v2 API, e.g. registry-1.docker.io
     pub repository: String, // e.g. library/postgres, coollabsio/sentinel
@@ -15,7 +9,6 @@ pub struct ImageRef {
 
 /// Parse a docker image reference into (registry, repository, tag), applying
 /// Docker Hub defaulting (implicit docker.io + library/ for single-segment names).
-#[allow(dead_code)] // consumed by the manifest client added in Task 6
 pub fn parse_image_ref(image: &str) -> Option<ImageRef> {
     if image.is_empty() {
         return None;
@@ -53,7 +46,6 @@ pub fn parse_image_ref(image: &str) -> Option<ImageRef> {
 }
 
 /// Parse a Bearer `WWW-Authenticate` challenge into (realm, service, scope).
-#[allow(dead_code)] // consumed by the manifest client added in Task 6
 pub fn parse_www_authenticate(header: &str) -> Option<(String, String, Option<String>)> {
     let h = header.trim();
     let rest = h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer "))?;
@@ -92,7 +84,6 @@ static CACHE: RwLock<Option<HashMap<String, Cached>>> = RwLock::new(None);
 /// Compare the running image's local digest to the registry's current tag digest.
 /// Returns Some(true/false) only on a successful compare; None when unknown
 /// (no local digest, private/unauthorized, network/registry error).
-#[allow(dead_code)] // wired into the poller in Task 7
 pub async fn check_update(client: &reqwest::Client, image: &str, local_digest: Option<&str>) -> Option<bool> {
     let local = local_digest?; // no local repo digest -> undeterminable
     // cache hit?
@@ -113,7 +104,6 @@ pub async fn check_update(client: &reqwest::Client, image: &str, local_digest: O
     result
 }
 
-#[allow(dead_code)] // consumed by check_update above
 async fn fetch_remote_digest(client: &reqwest::Client, image: &str) -> Option<String> {
     let r = parse_image_ref(image)?;
     let url = format!("https://{}/v2/{}/manifests/{}", r.registry, r.repository, r.tag);

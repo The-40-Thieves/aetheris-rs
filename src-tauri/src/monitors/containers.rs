@@ -1,9 +1,4 @@
 //! Docker container monitor. See docs/superpowers/specs/2026-07-08-container-monitoring-design.md
-//!
-//! Model + byte-string parsers land first (this task); the CLI/bollard
-//! backends, cache and `get_container_stats()` that consume them land in
-//! later tasks on this branch. Until then `Container` and the parsers below
-//! are unused from the crate's perspective, hence the `dead_code` allows.
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -11,7 +6,6 @@ use std::sync::RwLock;
 
 #[derive(Serialize, Default, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // constructed by the collection backends added in later tasks
 pub struct Container {
     pub id: String,
     pub name: String,
@@ -39,7 +33,6 @@ pub struct Container {
 
 /// Parse a docker size string ("23.43MiB", "1.11MB", "401kB", "0B") to bytes.
 /// Docker uses IEC (MiB/GiB, 1024) for memory and SI (kB/MB/GB, 1000) for I/O.
-#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn parse_bytes(s: &str) -> Option<f64> {
     let s = s.trim();
     if s.is_empty() || s == "--" || s == "N/A" {
@@ -66,7 +59,6 @@ fn parse_bytes(s: &str) -> Option<f64> {
 }
 
 /// Parse a docker "A / B" pair (MemUsage, NetIO, BlockIO) into (A, B) bytes.
-#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn parse_pair(s: &str) -> (Option<f64>, Option<f64>) {
     let mut it = s.split('/');
     let a = it.next().and_then(parse_bytes);
@@ -75,17 +67,14 @@ fn parse_pair(s: &str) -> (Option<f64>, Option<f64>) {
 }
 
 /// Parse a "12.5%" percentage into f64.
-#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn parse_percent(s: &str) -> Option<f64> {
     s.trim().trim_end_matches('%').trim().parse().ok()
 }
 
-#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn short_id(id: &str) -> String {
     id.chars().take(12).collect()
 }
 
-#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn health_from(s: &str) -> String {
     match s {
         "healthy" | "unhealthy" | "starting" => s.to_string(),
@@ -95,7 +84,6 @@ fn health_from(s: &str) -> String {
 
 /// Join `docker ps`/`stats` (newline-delimited JSON) and `docker inspect` (JSON
 /// array) by 12-char container id into normalized Containers.
-#[allow(dead_code)] // consumed by collect_via_cli(), wired up in Task 3
 pub(crate) fn merge_cli(ps: &str, stats: &str, inspect: &str) -> Vec<Container> {
     // stats keyed by short id
     let mut stats_map: HashMap<String, Value> = HashMap::new();
@@ -169,7 +157,6 @@ struct Cache {
 static CACHE: RwLock<Option<Cache>> = RwLock::new(None);
 
 /// Synchronous cache read for get_stats. Never blocks on Docker.
-#[allow(dead_code)] // called by get_stats once main.rs wires it up in Task 8
 pub fn get_container_stats() -> Value {
     let guard = CACHE.read().unwrap();
     match guard.as_ref() {
@@ -183,7 +170,6 @@ pub fn get_container_stats() -> Value {
 }
 
 /// Run a docker CLI subcommand, returning stdout on success.
-#[allow(dead_code)] // consumed by collect_via_cli(), wired up in Task 3
 async fn docker(args: &[&str]) -> Option<String> {
     let out = tokio::process::Command::new("docker").args(args).output().await.ok()?;
     if out.status.success() {
@@ -194,7 +180,6 @@ async fn docker(args: &[&str]) -> Option<String> {
 }
 
 /// Collect containers via the docker CLI. None if docker is unavailable.
-#[allow(dead_code)] // consumed by refresh(), wired up to main.rs in Task 8
 async fn collect_via_cli() -> Option<Vec<Container>> {
     let ps = docker(&["ps", "--format", "{{json .}}"]).await?;
     // Stats/inspect are best-effort enrichment; ps alone still yields containers.
@@ -258,7 +243,6 @@ async fn collect_via_cli() -> Option<Vec<Container>> {
 
 /// Docker's CPU% formula: (cpu_delta / system_delta) * online_cpus * 100.
 /// None on any missing/non-monotonic sample (never fabricates a 0%).
-#[allow(dead_code)] // consumed by collect_via_bollard(), added below
 fn cpu_percent(cpu_total: u64, precpu_total: u64, system: u64, presystem: u64, online_cpus: u64) -> Option<f64> {
     let cpu_delta = cpu_total.checked_sub(precpu_total)? as f64;
     let system_delta = system.checked_sub(presystem)? as f64;
@@ -301,7 +285,6 @@ fn format_uptime(secs: i64) -> String {
 /// Collect containers via the bollard Docker Engine API (socket), used when
 /// the `docker` CLI itself is unavailable but the daemon socket is reachable.
 /// None if the daemon can't be reached at all.
-#[allow(dead_code)] // consumed by refresh(), wired up to main.rs in Task 8
 async fn collect_via_bollard() -> Option<Vec<Container>> {
     use bollard::query_parameters::{InspectContainerOptions, ListContainersOptions, StatsOptions};
     use bollard::Docker;
@@ -468,7 +451,6 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
 /// Refresh the cache. Tries the CLI, then bollard, then records unavailable.
 /// Once containers are collected, checks each image against its registry
 /// concurrently to populate `image_update_available`.
-#[allow(dead_code)] // called on a timer once main.rs wires it up in Task 8
 pub async fn refresh() {
     let collected = match collect_via_cli().await {
         Some(c) => Some(c),

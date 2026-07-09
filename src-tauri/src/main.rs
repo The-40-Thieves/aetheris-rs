@@ -383,7 +383,7 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
                 "egressTopology": egress,
                 "externalBaselines": baselines,
                 "plur": {},
-                "containers": [],
+                "containers": monitors::containers::get_container_stats(),
                 "outpostStats": {}
             }
         }
@@ -444,6 +444,21 @@ fn main() {
                 loop {
                     monitors::external_baselines::refresh(&client).await;
                     tokio::time::sleep(std::time::Duration::from_secs(3 * 3600)).await;
+                }
+            });
+            // Refresh the docker container cache. A hung docker daemon must
+            // never stall this loop forever, so each refresh is bounded by a
+            // timeout; on expiry we log and try again next tick rather than
+            // panicking or blocking indefinitely.
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    if tokio::time::timeout(std::time::Duration::from_secs(30), monitors::containers::refresh())
+                        .await
+                        .is_err()
+                    {
+                        eprintln!("monitors::containers::refresh() timed out after 30s; will retry next tick");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
                 }
             });
             Ok(())
