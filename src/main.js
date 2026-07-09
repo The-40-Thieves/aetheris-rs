@@ -52,9 +52,12 @@ function ctx2d(cv, cssW, cssH) {
 }
 
 // Arc gauge: value 0..1 swept 135deg..405deg. track always drawn (so an
-// unavailable instrument still reads as a real, empty gauge).
-function arcGauge(cv, val, color) {
-  const { c, w, h } = ctx2d(cv, cv.width / dpr || 72, cv.height / dpr || 60);
+// unavailable instrument still reads as a real, empty gauge). cssW/cssH are the
+// display size; ctx2d scales the backing store by dpr for crisp HiDPI output,
+// so we pin the CSS size here to keep the on-screen dimensions fixed.
+function arcGauge(cv, val, color, cssW = 72, cssH = 60) {
+  cv.style.width = cssW + 'px'; cv.style.height = cssH + 'px';
+  const { c, w, h } = ctx2d(cv, cssW, cssH);
   const cx = w / 2, cy = h * 0.62, r = Math.min(w, h) * 0.42, a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
   c.lineWidth = 6; c.lineCap = 'round';
   c.strokeStyle = '#0a0d13'; c.beginPath(); c.arc(cx, cy, r, a0, a1); c.stroke();
@@ -129,8 +132,8 @@ function render(stats) {
   setText('#clock', [t.getHours(), t.getMinutes(), t.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':'));
 
   // ---- CPU ----
-  const load = d.cpu?.currentLoad ?? 0;
-  setText('#cpu-val', load.toFixed(1));
+  const load = d.cpu?.currentLoad;                     // absent -> "—", never a fabricated 0
+  setText('#cpu-val', load != null ? load.toFixed(1) : '—');
   setText('#cpu-coren', `${s.cpu?.cores ?? (d.cpu?.currentLoadCpu?.length || '—')}c`);
   const cores = d.cpu?.currentLoadCpu || [];
   const host = $('#cpu-cores');
@@ -138,7 +141,7 @@ function render(stats) {
     host.innerHTML = ''; cores.forEach(() => host.appendChild(document.createElement('i')));
   }
   cores.forEach((v, i) => { host.children[i].style.height = (18 + Math.max(0, Math.min(100, v)) * 0.62) + '%'; });
-  push(cpuHist, load);
+  if (load != null) push(cpuHist, load);
   sparkline($('#cpu-spark'), cpuHist, col('--accent'), 30);
 
   // ---- Thermal (hottest sensor) ----
@@ -149,7 +152,7 @@ function render(stats) {
     const ratio = hot.temp / lim;
     const tcol = ratio >= 0.9 ? col('--crit') : ratio >= 0.7 ? col('--warn') : col('--good');
     setText('#therm-val', hot.temp.toFixed(0));
-    setText('#therm-meta', `${esc(hot.label || 'sensor')} · crit ${hot.critical ?? hot.max ?? '—'}`);
+    setText('#therm-meta', `${hot.label || 'sensor'} · crit ${hot.critical ?? hot.max ?? '—'}`);
     arcGauge($('#therm-gauge'), ratio, tcol);
   } else {
     setText('#therm-val', '—'); setText('#therm-meta', 'no sensors');
@@ -191,10 +194,10 @@ function render(stats) {
     const eol = rul.estimatedEndOfLife ? new Date(rul.estimatedEndOfLife).toLocaleDateString() : '—';
     setText('#ssd-eol', `EOL ${eol}${rul.confidence === 'low' ? ' · est' : ''}`);
     setText('#ssd-written', `${fmtBytes(disk.bytesWritten)} written`);
-    arcGauge($('#ssd-dial'), hp != null ? hp / 100 : null, hcol);
+    arcGauge($('#ssd-dial'), hp != null ? hp / 100 : null, hcol, 72, 62);
   } else {
     setText('#ssd-val', '—'); setText('#ssd-eol', 'no SMART data'); setText('#ssd-written', '');
-    arcGauge($('#ssd-dial'), null, col('--faint'));
+    arcGauge($('#ssd-dial'), null, col('--faint'), 72, 62);
   }
 
   // ---- Network ----
@@ -333,7 +336,7 @@ function render(stats) {
   const ev = bl.ai_evals || {};
   const arena = ev.lmsys_chat_arena || [];
   if (ev.status === 'ok' && arena.length) {
-    setText('#arena-asof', ev.last_updated ? esc(ev.last_updated) : 'live');
+    setText('#arena-asof', ev.last_updated || 'live');
     reconcile($('#arena-body'), arena.slice(0, 3), (a) => `${a.rank}|${a.model}`, 'div', (a) => {
       a.__cls = 'kv';
       return `<span class="k">#${esc(a.rank)} ${esc(a.model)}</span><span class="v num${a.rank === 1 ? ' accent' : ''}">${a.score != null ? esc(a.score) : '—'}</span>`;
@@ -346,7 +349,7 @@ function render(stats) {
   // ---- DORA (mixed live / needs-link) ----
   const dora = bl.dora || {}, lm = dora.local_metrics || {};
   const isNa = (v) => String(v ?? 'n/a').startsWith('n/a');
-  const hasRepo = dora.status !== 'unavailable' && lm.status !== 'unavailable';
+  const hasRepo = lm.status !== 'unavailable';   // availability lives on local_metrics.status
   const setDora = (sel, val) => {
     const row = $(sel), v = row.querySelector('.v');
     if (isNa(val)) { row.className = 'kv unlinked'; v.textContent = '◆ not linked'; v.title = String(val ?? ''); }
@@ -367,7 +370,7 @@ function render(stats) {
     dHint.style.display = 'flex'; dHintText.innerHTML = 'CI failure metrics need the GitHub Actions API. Set <span class="env">GITHUB_TOKEN</span> or run <span class="env">gh auth login</span>.';
     setup += 1;
   } else {
-    dBadge.className = 'badge b-good'; dBadge.textContent = esc(lm.tier_rating || 'ok');
+    dBadge.className = 'badge b-good'; dBadge.textContent = lm.tier_rating || 'ok';
     dHint.style.display = 'none';
   }
 
