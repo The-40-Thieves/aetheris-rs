@@ -219,23 +219,136 @@ async fn collect_via_cli() -> Option<Vec<Container>> {
     Some(merge_cli(&ps, &stats, &inspect))
 }
 
-/// Refresh the cache. Tries CLI, then (Task 4) bollard, then records unavailable.
+/// Docker's CPU% formula: (cpu_delta / system_delta) * online_cpus * 100.
+/// None on any missing/non-monotonic sample (never fabricates a 0%).
+#[allow(dead_code)] // consumed by collect_via_bollard(), added below
+fn cpu_percent(cpu_total: u64, precpu_total: u64, system: u64, presystem: u64, online_cpus: u64) -> Option<f64> {
+    let cpu_delta = cpu_total.checked_sub(precpu_total)? as f64;
+    let system_delta = system.checked_sub(presystem)? as f64;
+    if system_delta <= 0.0 || cpu_delta < 0.0 {
+        return None;
+    }
+    let cpus = if online_cpus == 0 { 1 } else { online_cpus } as f64;
+    Some(cpu_delta / system_delta * cpus * 100.0)
+}
+
+/// Collect containers via the bollard Docker Engine API (socket), used when
+/// the `docker` CLI itself is unavailable but the daemon socket is reachable.
+/// None if the daemon can't be reached at all.
+#[allow(dead_code)] // consumed by refresh(), wired up to main.rs in Task 8
+async fn collect_via_bollard() -> Option<Vec<Container>> {
+    use bollard::query_parameters::{InspectContainerOptions, ListContainersOptions, StatsOptions};
+    use bollard::Docker;
+    use futures_util::StreamExt;
+
+    let docker = Docker::connect_with_local_defaults().ok()?;
+    // Verify the daemon answers before committing to this backend.
+    docker.ping().await.ok()?;
+
+    let summaries = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            ..Default::default()
+        }))
+        .await
+        .ok()?;
+
+    let mut out = Vec::new();
+    for s in summaries {
+        let id = s.id.clone().unwrap_or_default();
+        let sid = short_id(&id);
+        let mut c = Container {
+            id: sid,
+            name: s
+                .names
+                .as_ref()
+                .and_then(|n| n.first())
+                .map(|n| n.trim_start_matches('/').to_string())
+                .unwrap_or_default(),
+            image: s.image.clone().unwrap_or_default(),
+            state: s.state.map(|st| st.as_ref().to_string()).unwrap_or_default(),
+            status: s.status.clone().unwrap_or_default(),
+            health: "none".to_string(),
+            ..Default::default()
+        };
+
+        // Restart count + health via inspect.
+        if let Ok(insp) = docker
+            .inspect_container(&id, None::<InspectContainerOptions>)
+            .await
+        {
+            c.restart_count = insp.restart_count.map(|r| r as u64);
+            if let Some(h) = insp
+                .state
+                .as_ref()
+                .and_then(|st| st.health.as_ref())
+                .and_then(|h| h.status)
+            {
+                c.health = health_from(h.as_ref());
+            }
+        }
+
+        // One-shot-but-accurate stats (stream:false gives populated precpu_stats).
+        // `stats()` returns a Stream directly (not a Future); one `next()` yields
+        // a single sample when stream:false is set.
+        let mut stream = docker.stats(
+            &id,
+            Some(StatsOptions {
+                stream: false,
+                one_shot: false,
+            }),
+        );
+        if let Some(Ok(st)) = stream.next().await {
+            if let (Some(cpu), Some(pre)) = (st.cpu_stats.as_ref(), st.precpu_stats.as_ref()) {
+                let cpu_total = cpu.cpu_usage.as_ref().and_then(|u| u.total_usage).unwrap_or(0);
+                let precpu_total = pre.cpu_usage.as_ref().and_then(|u| u.total_usage).unwrap_or(0);
+                let system = cpu.system_cpu_usage.unwrap_or(0);
+                let presystem = pre.system_cpu_usage.unwrap_or(0);
+                let online_cpus = cpu.online_cpus.unwrap_or(0) as u64;
+                c.cpu_percent = cpu_percent(cpu_total, precpu_total, system, presystem, online_cpus);
+            }
+            if let Some(mem) = st.memory_stats.as_ref() {
+                c.mem_used = mem.usage.map(|u| u as f64);
+                c.mem_limit = mem.limit.map(|l| l as f64);
+                if let (Some(u), Some(l)) = (c.mem_used, c.mem_limit) {
+                    if l > 0.0 {
+                        c.mem_percent = Some(u / l * 100.0);
+                    }
+                }
+            }
+            if let Some(nets) = st.networks.as_ref() {
+                c.net_rx = Some(nets.values().filter_map(|n| n.rx_bytes).sum::<u64>() as f64);
+                c.net_tx = Some(nets.values().filter_map(|n| n.tx_bytes).sum::<u64>() as f64);
+            }
+        }
+        out.push(c);
+    }
+    Some(out)
+}
+
+/// Refresh the cache. Tries the CLI, then bollard, then records unavailable.
 #[allow(dead_code)] // called on a timer once main.rs wires it up in Task 8
 pub async fn refresh() {
-    if let Some(containers) = collect_via_cli().await {
-        *CACHE.write().unwrap() = Some(Cache {
-            status: "ok",
-            reason: String::new(),
-            containers,
-        });
-        return;
+    let collected = match collect_via_cli().await {
+        Some(c) => Some(c),
+        None => collect_via_bollard().await,
+    };
+    match collected {
+        Some(containers) => {
+            *CACHE.write().unwrap() = Some(Cache {
+                status: "ok",
+                reason: String::new(),
+                containers,
+            });
+        }
+        None => {
+            *CACHE.write().unwrap() = Some(Cache {
+                status: "unavailable",
+                reason: "docker CLI and socket both unavailable".to_string(),
+                containers: Vec::new(),
+            });
+        }
     }
-    // Backends exhausted (bollard added in Task 4 before this fallthrough).
-    *CACHE.write().unwrap() = Some(Cache {
-        status: "unavailable",
-        reason: "docker CLI and socket both unavailable".to_string(),
-        containers: Vec::new(),
-    });
 }
 
 #[cfg(test)]
@@ -285,6 +398,26 @@ mod tests {
                 x.name, x.state, x.health, x.cpu_percent, x.mem_used, x.restart_count);
         }
         assert!(!c.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "live: requires a reachable docker socket on this host"]
+    async fn live_bollard_probe() {
+        let c = collect_via_bollard().await.expect("bollard should reach the docker socket");
+        eprintln!("collected {} containers via bollard", c.len());
+        for x in c.iter().take(5) {
+            eprintln!("{} | {} | {} | cpu={:?} mem={:?} restarts={:?}",
+                x.name, x.state, x.health, x.cpu_percent, x.mem_used, x.restart_count);
+        }
+        assert!(!c.is_empty());
+    }
+
+    #[test]
+    fn cpu_percent_formula() {
+        // cpu_delta=100, system_delta=1000, 4 cpus -> 100/1000*4*100 = 40%
+        assert_eq!(cpu_percent(200, 100, 5000, 4000, 4), Some(40.0));
+        // zero system delta -> None (no divide-by-zero, no fake 0)
+        assert_eq!(cpu_percent(200, 100, 4000, 4000, 4), None);
     }
 
     #[test]
