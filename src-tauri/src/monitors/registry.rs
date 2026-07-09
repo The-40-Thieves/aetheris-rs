@@ -73,6 +73,82 @@ pub fn parse_www_authenticate(header: &str) -> Option<(String, String, Option<St
     Some((realm?, service?, scope))
 }
 
+use std::collections::HashMap;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
+
+const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, \
+application/vnd.docker.distribution.manifest.list.v2+json, \
+application/vnd.oci.image.manifest.v1+json, \
+application/vnd.docker.distribution.manifest.v2+json";
+const TTL: Duration = Duration::from_secs(45 * 60);
+
+struct Cached {
+    at: Instant,
+    result: Option<bool>,
+}
+static CACHE: RwLock<Option<HashMap<String, Cached>>> = RwLock::new(None);
+
+/// Compare the running image's local digest to the registry's current tag digest.
+/// Returns Some(true/false) only on a successful compare; None when unknown
+/// (no local digest, private/unauthorized, network/registry error).
+#[allow(dead_code)] // wired into the poller in Task 7
+pub async fn check_update(client: &reqwest::Client, image: &str, local_digest: Option<&str>) -> Option<bool> {
+    let local = local_digest?; // no local repo digest -> undeterminable
+    // cache hit?
+    {
+        let g = CACHE.read().unwrap();
+        if let Some(m) = g.as_ref() {
+            if let Some(c) = m.get(image) {
+                if c.at.elapsed() < TTL {
+                    return c.result;
+                }
+            }
+        }
+    }
+    let result = fetch_remote_digest(client, image).await.map(|remote| remote != local);
+    let mut g = CACHE.write().unwrap();
+    g.get_or_insert_with(HashMap::new)
+        .insert(image.to_string(), Cached { at: Instant::now(), result });
+    result
+}
+
+#[allow(dead_code)] // consumed by check_update above
+async fn fetch_remote_digest(client: &reqwest::Client, image: &str) -> Option<String> {
+    let r = parse_image_ref(image)?;
+    let url = format!("https://{}/v2/{}/manifests/{}", r.registry, r.repository, r.tag);
+    let head = |token: Option<&str>| {
+        let mut req = client.head(&url).header("Accept", ACCEPT);
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        req
+    };
+    let resp = head(None).send().await.ok()?;
+    let resp = if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let chal = resp.headers().get("www-authenticate")?.to_str().ok()?.to_string();
+        let (realm, service, scope) = parse_www_authenticate(&chal)?;
+        let scope = scope.unwrap_or_else(|| format!("repository:{}:pull", r.repository));
+        let token: serde_json::Value = client
+            .get(&realm)
+            .query(&[("service", service.as_str()), ("scope", scope.as_str())])
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        let tok = token.get("token").or_else(|| token.get("access_token")).and_then(|t| t.as_str())?;
+        head(Some(tok)).send().await.ok()?
+    } else {
+        resp
+    };
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.headers().get("docker-content-digest")?.to_str().ok().map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +180,26 @@ mod tests {
         assert_eq!(realm, "https://auth.docker.io/token");
         assert_eq!(service, "registry.docker.io");
         assert_eq!(scope.unwrap(), "repository:library/postgres:pull");
+    }
+
+    #[tokio::test]
+    async fn check_update_none_without_local_digest() {
+        let client = reqwest::Client::new();
+        assert_eq!(check_update(&client, "postgres:16", None).await, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "live: hits ghcr.io anonymously"]
+    async fn live_registry_probe() {
+        let client = reqwest::Client::new();
+        // A digest that cannot match the current one -> Some(true); a wrong-but-present flow proves the fetch+token path.
+        let r = check_update(
+            &client,
+            "ghcr.io/coollabsio/sentinel:0.0.21",
+            Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        )
+        .await;
+        eprintln!("registry check result: {r:?}");
+        assert_eq!(r, Some(true), "a bogus local digest must differ from the real remote digest");
     }
 }
