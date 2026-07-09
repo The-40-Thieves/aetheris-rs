@@ -38,7 +38,9 @@ mod macos {
             .args(["-nP", "-w", "-i", "-F", "pcfnPtT"])
             .output()
         {
-            Ok(o) if o.status.success() => o.stdout,
+            // Unprivileged `lsof -i` can exit non-zero (can't inspect other
+            // users' processes) while still writing valid stdout — accept that.
+            Ok(o) if o.status.success() || !o.stdout.is_empty() => o.stdout,
             _ => return Vec::new(),
         };
         super::parse_lsof(&String::from_utf8_lossy(&out))
@@ -262,6 +264,11 @@ mod windows {
         let mut names: HashMap<u32, Option<String>> = HashMap::new();
         let mut out = Vec::new();
         for (remote_ip, remote_port, pid) in conns {
+            // Skip local/loopback peers before the OpenProcess/name lookup — no
+            // point resolving a name for a connection we won't report as egress.
+            if cloud_ranges::is_local(remote_ip) {
+                continue;
+            }
             let name = names.entry(pid).or_insert_with(|| pid_to_name(pid)).clone();
             if let Some(v) = conn_json(name, Some(pid), remote_ip, remote_port, "ESTABLISHED") {
                 out.push(v);
