@@ -20,7 +20,7 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.39.5"
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
 tokio = "1.52.3"
 which = "8.0.4"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
@@ -29,4 +29,10 @@ axum = "0.8.9"
 starship-battery = "0.11.1"
 tauri-plugin-shell = "2.3.5"
 ipnet = { version = "2", features = ["serde"] }
+async-stream = "0.3"
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
 

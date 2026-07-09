@@ -109,6 +109,20 @@ function updateDOM() {
         }
         document.getElementById('gpu-content').innerHTML = gpuHtml;
 
+        // --- AI Proxy Observability (real telemetry, not a static label) ---
+        const ai = (stats.dynamic.extras && stats.dynamic.extras.aiProxy) || {};
+        const tpsEl = document.getElementById('ai-tps');
+        const aiStatusEl = document.getElementById('ai-proxy-status');
+        if (tpsEl) {
+            tpsEl.innerText = ai.lastTokensPerSec != null
+                ? `${ai.lastTokensPerSec.toFixed(1)} tok/s (last request)`
+                : 'No traffic yet';
+        }
+        if (aiStatusEl) {
+            const n = ai.samples || 0;
+            aiStatusEl.innerText = `Proxy on ${esc(ai.proxyAddr || '127.0.0.1:3030')} · ${n} request${n === 1 ? '' : 's'} observed`;
+        }
+
         // --- Storage & RUL ---
         let storageHtml = '';
         if (stats.dynamic.extras.smartDisks && stats.dynamic.extras.smartDisks.length > 0) {

@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, OptionalExtension, Result};
 use std::sync::Mutex;
 use std::path::PathBuf;
 
@@ -36,6 +36,43 @@ impl Database {
         Ok(Database {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// Append one telemetry sample. Used by the AI proxy (tokens/sec) and the
+    /// hardware monitors (SSD bytes written, battery SOH/cycles) so the RUL
+    /// analytics can compute real velocities from history instead of constants.
+    /// `context` is a free-form string (we store JSON) identifying the subject
+    /// (disk model, battery vendor/model, inference engine).
+    pub fn insert_metric(&self, metric_type: &str, value: f64, context: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO telemetry (metric_type, value, context) VALUES (?1, ?2, ?3)",
+            rusqlite::params![metric_type, value, context],
+        )
+    }
+
+    /// Most recent recorded value for a metric type, if any.
+    pub fn latest_metric(&self, metric_type: &str) -> Option<f64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM telemetry WHERE metric_type = ?1 ORDER BY id DESC LIMIT 1",
+            rusqlite::params![metric_type],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// Number of recorded samples for a metric type.
+    pub fn count_metric(&self, metric_type: &str) -> i64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM telemetry WHERE metric_type = ?1",
+            rusqlite::params![metric_type],
+            |row| row.get(0),
+        )
+        .unwrap_or(0)
     }
 
     fn seed_tbw(conn: &Connection) -> Result<()> {

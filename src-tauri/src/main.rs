@@ -309,6 +309,11 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
                     batt["rul"] = analytics::rul::calculate_battery_rul(&state.db, soh, cc);
                     batt
                 }).collect::<Vec<_>>(),
+                "aiProxy": {
+                    "proxyAddr": "127.0.0.1:3030",
+                    "lastTokensPerSec": state.db.latest_metric("ai_tokens_per_sec"),
+                    "samples": state.db.count_metric("ai_tokens_per_sec")
+                },
                 "egressTopology": monitors::network_topology::get_egress_topology(&state.db),
                 "externalBaselines": monitors::external_baselines::get_external_baselines(&state.db),
                 "plur": {},
