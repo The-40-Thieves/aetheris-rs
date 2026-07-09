@@ -123,6 +123,11 @@ pub(crate) fn merge_cli(ps: &str, stats: &str, inspect: &str) -> Vec<Container> 
             status: get("Status"),
             health: health_from(&get("HealthStatus")),
             ports: get("Ports"),
+            // NOTE: this CLI backend takes CreatedAt/RunningFor verbatim from
+            // `docker ps` (e.g. "2026-07-08 03:38:33 -0400 EDT" / "20 hours
+            // ago"), while the bollard backend below formats these itself via
+            // format_uptime/to_rfc3339 — the two are not byte-compatible.
+            // Neither field is currently rendered in the UI.
             created_at: get("CreatedAt"),
             uptime: get("RunningFor"),
             restart_count: restart_map.get(&id).copied(),
@@ -171,7 +176,9 @@ pub fn get_container_stats() -> Value {
 
 /// Run a docker CLI subcommand, returning stdout on success.
 async fn docker(args: &[&str]) -> Option<String> {
-    let out = tokio::process::Command::new("docker").args(args).output().await.ok()?;
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.args(args).kill_on_drop(true);
+    let out = cmd.output().await.ok()?;
     if out.status.success() {
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -190,7 +197,9 @@ async fn docker(args: &[&str]) -> Option<String> {
 /// here would discard every already-successful line just because one of many
 /// batched names failed. None only when the process itself couldn't run.
 async fn docker_batch_lenient(args: &[&str]) -> Option<String> {
-    let out = tokio::process::Command::new("docker").args(args).output().await.ok()?;
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.args(args).kill_on_drop(true);
+    let out = cmd.output().await.ok()?;
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -321,6 +330,11 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
         .await
         .ok()?;
 
+    // Fetches stats one container at a time (~1s daemon round-trip each), so
+    // this bollard fallback can be noticeably slow on hosts with many
+    // containers — the CLI backend (`docker stats --no-stream` for all
+    // containers in one call) is the fast common path; this only runs when
+    // the CLI itself is unavailable.
     let mut out = Vec::new();
     for s in summaries {
         let id = s.id.clone().unwrap_or_default();
@@ -487,7 +501,12 @@ pub async fn refresh() {
         }
     };
 
-    let client = reqwest::Client::new();
+    // Bound each registry request so one slow/hung registry can't consume the
+    // whole refresh budget across every container being checked.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let checks = futures_util::future::join_all(containers.iter().map(|c| {
         let image = c.image.clone();
         let digest = c.local_digest.clone();

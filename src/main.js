@@ -242,6 +242,8 @@ function updateDOM() {
                         <td title="image update available">${upd}</td>
                     </tr>`;
             });
+        } else if (cw.status === 'ok') {
+            contHtml = `<tr><td colspan="8" class="empty-state">No running containers</td></tr>`;
         } else {
             const reason = cw.reason ? ` (${esc(cw.reason)})` : '';
             contHtml = `<tr><td colspan="8" class="empty-state">Docker not available${reason}</td></tr>`;

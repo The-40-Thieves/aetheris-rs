@@ -77,7 +77,13 @@ const TTL: Duration = Duration::from_secs(45 * 60);
 
 struct Cached {
     at: Instant,
-    result: Option<bool>,
+    // The expensive network result: the remote tag's current digest, or None
+    // when the fetch failed (cached too, to rate-limit retries against a
+    // down/unauthorized registry). Never the true/false verdict itself —
+    // that's always recomputed against the CURRENT local digest below, so a
+    // `docker pull` that changes the local digest is reflected immediately
+    // instead of waiting out the TTL on a stale boolean.
+    remote_digest: Option<String>,
 }
 static CACHE: RwLock<Option<HashMap<String, Cached>>> = RwLock::new(None);
 
@@ -86,22 +92,24 @@ static CACHE: RwLock<Option<HashMap<String, Cached>>> = RwLock::new(None);
 /// (no local digest, private/unauthorized, network/registry error).
 pub async fn check_update(client: &reqwest::Client, image: &str, local_digest: Option<&str>) -> Option<bool> {
     let local = local_digest?; // no local repo digest -> undeterminable
-    // cache hit?
+
+    // cache hit? — reuse the cached remote digest, but still compare against
+    // the CURRENT local digest passed in this call.
     {
         let g = CACHE.read().unwrap();
         if let Some(m) = g.as_ref() {
             if let Some(c) = m.get(image) {
                 if c.at.elapsed() < TTL {
-                    return c.result;
+                    return c.remote_digest.as_deref().map(|remote| remote != local);
                 }
             }
         }
     }
-    let result = fetch_remote_digest(client, image).await.map(|remote| remote != local);
+    let remote_digest = fetch_remote_digest(client, image).await;
     let mut g = CACHE.write().unwrap();
     g.get_or_insert_with(HashMap::new)
-        .insert(image.to_string(), Cached { at: Instant::now(), result });
-    result
+        .insert(image.to_string(), Cached { at: Instant::now(), remote_digest: remote_digest.clone() });
+    remote_digest.map(|remote| remote != local)
 }
 
 async fn fetch_remote_digest(client: &reqwest::Client, image: &str) -> Option<String> {
