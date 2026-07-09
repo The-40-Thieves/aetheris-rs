@@ -216,6 +216,41 @@ function updateDOM() {
         }
         document.getElementById('egress-body').innerHTML = egressHtml;
 
+        // --- Containers ---
+        const cw = (stats.dynamic.extras && stats.dynamic.extras.containers) || {};
+        let contHtml = '';
+        if (cw.status === 'ok' && cw.containers && cw.containers.length > 0) {
+            cw.containers.forEach(c => {
+                const healthColor = c.health === 'unhealthy' ? 'var(--danger)'
+                    : c.state !== 'running' ? 'var(--danger)'
+                    : c.health === 'starting' ? 'var(--warning)' : 'inherit';
+                const restartColor = (c.restartCount || 0) > 3 ? 'var(--warning)' : 'inherit';
+                const cpu = c.cpuPercent != null ? `${c.cpuPercent.toFixed(1)}%` : '--';
+                const mem = c.memUsed != null ? `${formatBytes(c.memUsed)}${c.memLimit ? ' / ' + formatBytes(c.memLimit) : ''}` : '--';
+                const net = (c.netRx != null || c.netTx != null) ? `↓${formatBytes(c.netRx || 0)} ↑${formatBytes(c.netTx || 0)}` : '--';
+                const upd = c.imageUpdateAvailable === true ? '⬆'
+                    : c.imageUpdateAvailable === false ? '' : '?';
+                contHtml += `
+                    <tr>
+                        <td>${esc(c.name)}<br><span class="label" style="font-size:0.7rem">${esc(c.image)}</span></td>
+                        <td style="color:${healthColor}">${esc(c.state)}${c.health !== 'none' ? ' · ' + esc(c.health) : ''}</td>
+                        <td>${cpu}</td>
+                        <td>${mem}</td>
+                        <td><span style="font-size:0.75rem">${net}</span></td>
+                        <td style="color:${restartColor}">${c.restartCount != null ? c.restartCount : '--'}</td>
+                        <td><span class="label" style="font-size:0.75rem">${esc(c.uptime)}</span></td>
+                        <td title="image update available">${upd}</td>
+                    </tr>`;
+            });
+        } else if (cw.status === 'ok') {
+            contHtml = `<tr><td colspan="8" class="empty-state">No running containers</td></tr>`;
+        } else {
+            const reason = cw.reason ? ` (${esc(cw.reason)})` : '';
+            contHtml = `<tr><td colspan="8" class="empty-state">Docker not available${reason}</td></tr>`;
+        }
+        const contBody = document.getElementById('containers-body');
+        if (contBody) contBody.innerHTML = contHtml;
+
         // --- External Baselines ---
         if (stats.dynamic.extras.externalBaselines) {
             // DORA

@@ -63,6 +63,14 @@ per-process egress attribution, and local LLM inference observability.
 - **Chip Tjmax limits and SaaS pricing** are genuinely static reference data and
   are labelled as such (`as_of` + `source`).
 
+### Containers (Linux/any Docker host)
+- Real per-container telemetry via the Docker CLI (auto-falling back to the
+  Engine API over the socket via bollard): name, image, state, health, CPU%,
+  memory, network/block I/O, PIDs, restart count, ports, uptime.
+- **Image-update detection**: compares each image's local digest to the
+  registry's current manifest digest (anonymous bearer-token auth), cached per
+  image ~45 min. `true`/`false` only on a real compare; `null` when unknown.
+
 ### Security
 - Proxy binds **loopback only** (was `0.0.0.0`, an open unauthenticated proxy).
 - A restrictive **Content-Security-Policy** is set (was `null`); capabilities are
@@ -79,6 +87,7 @@ per-process egress attribution, and local LLM inference observability.
 | SMART / battery         |  ✅   |  ✅   |   ✅    |
 | AI proxy                |  ✅   |  ✅   |   ✅    |
 | Egress topology         |  ✅   |  🔜   |   🔜    |
+| Containers              |  ✅   |  ✅   |   ✅    |
 
 ¹ Apple GPU via `powermetrics` (requires root).
 
@@ -94,7 +103,6 @@ per-process egress attribution, and local LLM inference observability.
 - **macOS / Windows egress** via PKTAP and `GetExtendedTcpTable` respectively.
 - **CI-integrated DORA** (real change-failure-rate / MTTR from a CI provider API).
 - **Live SaaS pricing** (currently curated static reference).
-- **Container-level monitoring** (the `containers` field is a stub, not a feature).
 
 ## Requirements
 
