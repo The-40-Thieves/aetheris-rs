@@ -20,8 +20,10 @@ pub fn ai_router(db: Arc<Database>) -> Router {
     let state = ProxyState { client, db };
 
     Router::new()
-        .route("/ollama/*path", any(ollama_proxy))
-        .route("/lmstudio/*path", any(lmstudio_proxy))
+        // Axum 0.8 (matchit 0.8) requires the wildcard capture to be brace-wrapped
+        // as `{*path}`; the pre-0.8 bare `*path` form panics at router construction.
+        .route("/ollama/{*path}", any(ollama_proxy))
+        .route("/lmstudio/{*path}", any(lmstudio_proxy))
         .with_state(state)
 }
 
@@ -44,4 +46,21 @@ async fn lmstudio_proxy(
         .status(200)
         .body(Body::from(format!("Intercepted LM Studio Request to: {}", req.uri())))
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ai_router_builds_without_panicking() {
+        // Regression test for the axum 0.8 wildcard route syntax (`{*path}`).
+        // The pre-0.8 bare `*path` form panics inside `Router::route`, so simply
+        // constructing the router IS the assertion here.
+        let db = std::sync::Arc::new(
+            crate::database::Database::new(std::path::PathBuf::from(":memory:"))
+                .expect("in-memory db should init"),
+        );
+        let _router = ai_router(db);
+    }
 }
