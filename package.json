@@ -1,8 +1,8 @@
 {
   "name": "aetheris-rs",
   "private": true,
-  "version": "1.0.0",
-  "description": "God-Tier Cross-Platform Telemetry (Hardware, AI Observability, Hybrid Egress, Predictive Analytics)",
+  "version": "0.1.0",
+  "description": "Cross-platform machine telemetry (hardware, AI-proxy observability, per-process egress, predictive RUL)",
   "author": "The 40 Thieves",
   "type": "module",
   "scripts": {

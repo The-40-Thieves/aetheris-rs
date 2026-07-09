@@ -6,24 +6,20 @@ authors = ["you"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "aetheris_rs_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop-only build: no `[lib]` target. The staticlib/cdylib crate types and a
+# separate `lib.rs::run()` entry point only exist to support Tauri mobile
+# (android/ios) builds, and no `gen/android` or `gen/apple` targets are set up
+# here. `main.rs` is the single real entry point.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.39.5"
-reqwest = "0.13.4"
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
 tokio = "1.52.3"
 which = "8.0.4"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
@@ -31,4 +27,12 @@ chrono = "0.4.45"
 axum = "0.8.9"
 starship-battery = "0.11.1"
 tauri-plugin-shell = "2.3.5"
+ipnet = { version = "2", features = ["serde"] }
+async-stream = "0.3"
+futures-util = "0.3"
+plist = "1"
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
 

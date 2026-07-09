@@ -46,6 +46,7 @@
               <span class="value" id="uptime">--:--:--</span>
             </div>
           </div>
+        </section>
         <!-- Processes & Sensors Panel -->
         <section class="glass-panel card col-span-2">
           <h2>Processes & Sensors</h2>
@@ -86,12 +87,11 @@
           <h3>AI Proxy Observability & Evals</h3>
           <div class="metric-group">
              <div class="metric highlight">
-                <span class="label">Ollama TPS</span>
-                <span class="value">Active (Intercepting)</span>
+                <span class="label">Last Inference Speed</span>
+                <span class="value" id="ai-tps">No traffic yet</span>
              </div>
-             <div class="metric highlight">
-                <span class="label">LM Studio</span>
-                <span class="value">Ready</span>
+             <div class="metric">
+                <span class="label" id="ai-proxy-status">Proxy idle</span>
              </div>
           </div>
           <div class="divider"></div>

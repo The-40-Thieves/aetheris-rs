@@ -1,5 +1,17 @@
 const { invoke } = window.__TAURI__.core;
 
+// Escape untrusted strings (process names, device models, etc.) before they are
+// interpolated into innerHTML, to prevent HTML/script injection from crafted
+// process names or device identifiers.
+function esc(s) {
+    return String(s ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
 function formatBytes(bytes, decimals = 2) {
     if (!+bytes) return '0 Bytes';
     const k = 1024;
@@ -50,7 +62,7 @@ function updateDOM() {
                 procHtml += `
                     <tr>
                         <td>${p.pid}</td>
-                        <td>${p.name}</td>
+                        <td>${esc(p.name)}</td>
                         <td style="color: ${p.cpu > 50 ? 'var(--danger)' : 'inherit'}">${p.cpu.toFixed(1)}%</td>
                         <td>${p.mem.toFixed(1)}%</td>
                         <td><span style="font-size:0.75rem">R: ${formatBytes(p.disk_r)}/s <br> W: ${formatBytes(p.disk_w)}/s</span></td>
@@ -67,7 +79,7 @@ function updateDOM() {
                 let color = s.temp > (s.critical || 90) ? 'var(--danger)' : s.temp > (s.max || 80) ? 'var(--warning)' : 'inherit';
                 sensorHtml += `
                     <tr>
-                        <td>${s.label}</td>
+                        <td>${esc(s.label)}</td>
                         <td style="color: ${color}">${s.temp.toFixed(1)}°C</td>
                         <td><span class="label" style="font-size: 0.75rem">Max: ${s.max || '--'}</span></td>
                     </tr>
@@ -83,11 +95,16 @@ function updateDOM() {
         let gpuHtml = '';
         if (stats.dynamic.extras.gpus && stats.dynamic.extras.gpus.length > 0) {
             stats.dynamic.extras.gpus.forEach(gpu => {
-                let vramText = gpu.vramTotal > 0 ? `${formatBytes(gpu.vramUsed * 1024 * 1024)} / ${formatBytes(gpu.vramTotal * 1024 * 1024)}` : 'Unified Memory';
+                // VRAM is bytes for every vendor now; null means unknown/unified.
+                let vramText = gpu.vramTotal
+                    ? `${formatBytes(gpu.vramUsed)} / ${formatBytes(gpu.vramTotal)}`
+                    : 'Unified / N/A';
+                const loadText = gpu.load != null ? `${gpu.load.toFixed(1)}%` : '--%';
+                const tempText = gpu.temp != null ? `${gpu.temp.toFixed(1)}°C` : '--°C';
                 gpuHtml += `
                     <div class="metric">
-                        <span class="label">${gpu.vendor} - ${gpu.model}</span>
-                        <span class="value">${gpu.load.toFixed(1)}% | ${gpu.temp.toFixed(1)}°C</span>
+                        <span class="label">${esc(gpu.vendor)} - ${esc(gpu.model)}</span>
+                        <span class="value">${loadText} | ${tempText}</span>
                         <span class="label">VRAM: ${vramText}</span>
                     </div>
                 `;
@@ -97,17 +114,34 @@ function updateDOM() {
         }
         document.getElementById('gpu-content').innerHTML = gpuHtml;
 
+        // --- AI Proxy Observability (real telemetry, not a static label) ---
+        const ai = (stats.dynamic.extras && stats.dynamic.extras.aiProxy) || {};
+        const tpsEl = document.getElementById('ai-tps');
+        const aiStatusEl = document.getElementById('ai-proxy-status');
+        if (tpsEl) {
+            tpsEl.innerText = ai.lastTokensPerSec != null
+                ? `${ai.lastTokensPerSec.toFixed(1)} tok/s (last request)`
+                : 'No traffic yet';
+        }
+        if (aiStatusEl) {
+            const n = ai.samples || 0;
+            aiStatusEl.innerText = `Proxy on ${esc(ai.proxyAddr || '127.0.0.1:3030')} · ${n} request${n === 1 ? '' : 's'} observed`;
+        }
+
         // --- Storage & RUL ---
         let storageHtml = '';
         if (stats.dynamic.extras.smartDisks && stats.dynamic.extras.smartDisks.length > 0) {
             stats.dynamic.extras.smartDisks.forEach(disk => {
                 let rul = disk.rul || {};
                 let estDate = rul.estimatedEndOfLife ? new Date(rul.estimatedEndOfLife).toLocaleDateString() : 'N/A';
+                // Mark projections that fall back to the default velocity (too
+                // little history) so they aren't mistaken for a measured trend.
+                let estMark = rul.confidence === 'low' ? ' (est.)' : '';
                 storageHtml += `
                     <div class="metric highlight">
-                        <span class="label">${disk.device} - ${disk.model}</span>
-                        <span class="value">SOH: ${rul.healthPercent ? rul.healthPercent.toFixed(2) : '--'}%</span>
-                        <span class="label" style="color: var(--warning)">Est. EOL: ${estDate}</span>
+                        <span class="label">${esc(disk.device)} - ${esc(disk.model)}</span>
+                        <span class="value">SOH: ${rul.healthPercent != null ? rul.healthPercent.toFixed(2) : '--'}%</span>
+                        <span class="label" style="color: var(--warning)">Est. EOL: ${estDate}${estMark}</span>
                         <span class="label">Written: ${formatBytes(disk.bytesWritten)}</span>
                     </div>
                 `;
@@ -131,11 +165,12 @@ function updateDOM() {
             stats.dynamic.extras.batteries.forEach(batt => {
                 let rul = batt.rul || {};
                 let estDate = rul.estimatedEndOfLife ? new Date(rul.estimatedEndOfLife).toLocaleDateString() : 'N/A';
+                let estMark = rul.confidence === 'low' ? ' (est.)' : '';
                 battHtml += `
                     <div class="metric highlight">
                         <span class="label">SOH: ${batt.stateOfHealth.toFixed(1)}% | Cycles: ${batt.cycleCount}</span>
-                        <span class="value">${batt.stateOfCharge.toFixed(1)}% (${batt.state})</span>
-                        <span class="label" style="color: var(--warning)">Est. End of Optimal Life: ${estDate}</span>
+                        <span class="value">${batt.stateOfCharge.toFixed(1)}% (${esc(batt.state)})</span>
+                        <span class="label" style="color: var(--warning)">Est. End of Optimal Life: ${estDate}${estMark}</span>
                     </div>
                 `;
             });
@@ -145,18 +180,34 @@ function updateDOM() {
         document.getElementById('battery-content').innerHTML = battHtml;
 
         // --- Egress Topology ---
+        // Values may legitimately be null: bytes_sent is null when tcp_info is
+        // unavailable, and estimated_cost_usd is null when bytes are unknown or
+        // the provider is unattributed. Render those honestly, never as $0.00.
         let egressHtml = '';
         if (stats.dynamic.extras.egressTopology && stats.dynamic.extras.egressTopology.length > 0) {
             stats.dynamic.extras.egressTopology.forEach(conn => {
+                const pidLabel = conn.pid != null ? ` (PID ${conn.pid})` : '';
+                const sentCell = conn.bytes_sent != null
+                    ? formatBytes(conn.bytes_sent)
+                    : `<span class="label" title="Per-PID byte accounting requires the eBPF probe (roadmap)">—</span>`;
+                let costCell;
+                if (conn.estimated_cost_usd == null) {
+                    costCell = `<span class="label">n/a</span>`;
+                } else if (conn.is_mesh || conn.estimated_cost_usd === 0) {
+                    costCell = `<span style="color: var(--success)">Free</span>`;
+                } else {
+                    costCell = `<span style="color: var(--warning)">$${conn.estimated_cost_usd.toFixed(2)}</span>`;
+                }
+                const conf = conn.attribution_confidence === 'fallback'
+                    ? ` <span class="label" style="font-size:0.7rem" title="Coarse hardcoded ranges; live provider lists still loading">~</span>`
+                    : '';
                 egressHtml += `
                     <tr>
-                        <td style="${conn.shadow_alert ? 'color: var(--danger)' : ''}">${conn.process} (PID ${conn.pid})</td>
-                        <td>${conn.destination_name} <br><span class="label" style="font-size: 0.75rem">${conn.destination_ip}</span></td>
-                        <td>${formatBytes(conn.bytes_sent)}</td>
-                        <td>${conn.provider}</td>
-                        <td style="color: ${conn.estimated_cost_usd > 0 ? 'var(--warning)' : 'var(--success)'}">
-                            $${conn.estimated_cost_usd.toFixed(2)}
-                        </td>
+                        <td style="${conn.shadow_alert ? 'color: var(--danger)' : ''}">${esc(conn.process)}${pidLabel}</td>
+                        <td>${esc(conn.destination_name)}${conf} <br><span class="label" style="font-size: 0.75rem">${esc(conn.destination_ip)}</span></td>
+                        <td>${sentCell}</td>
+                        <td>${esc(conn.provider)}</td>
+                        <td>${costCell}</td>
                     </tr>
                 `;
             });
@@ -182,22 +233,29 @@ function updateDOM() {
             stats.dynamic.extras.externalBaselines.observability_pricing.forEach(p => {
                 let color = p.est_monthly_cost === "$0" ? 'var(--success)' : 'var(--text-main)';
                 prHtml += `<tr>
-                    <td style="color: ${color}; font-weight: ${p.est_monthly_cost === "$0" ? 'bold' : 'normal'}">${p.tool}</td>
-                    <td style="color: ${color}">${p.tier}</td>
-                    <td style="color: ${color}">${p.est_monthly_cost}</td>
+                    <td style="color: ${color}; font-weight: ${p.est_monthly_cost === "$0" ? 'bold' : 'normal'}">${esc(p.tool)}</td>
+                    <td style="color: ${color}">${esc(p.tier)}</td>
+                    <td style="color: ${color}">${esc(p.est_monthly_cost)}</td>
                 </tr>`;
             });
             document.getElementById('pricing-body').innerHTML = prHtml;
 
-            // AI Evals
+            // AI Evals (live Arena mirror, or explicit unavailable state)
             let aiHtml = '';
-            stats.dynamic.extras.externalBaselines.ai_evals.lmsys_chat_arena.forEach(ai => {
-                aiHtml += `<tr>
-                    <td>#${ai.rank}</td>
-                    <td>${ai.model}</td>
-                    <td>${ai.score} ELO</td>
-                </tr>`;
-            });
+            const aiEvals = stats.dynamic.extras.externalBaselines.ai_evals || {};
+            const arena = aiEvals.lmsys_chat_arena || [];
+            if (aiEvals.status === 'ok' && arena.length > 0) {
+                arena.forEach(ai => {
+                    const rank = ai.rank != null ? `#${esc(ai.rank)}` : '—';
+                    const score = ai.score != null ? `${esc(ai.score)} ELO` : '—';
+                    aiHtml += `<tr><td>${rank}</td><td>${esc(ai.model)}</td><td>${score}</td></tr>`;
+                });
+                if (aiEvals.last_updated) {
+                    aiHtml += `<tr><td colspan="3" class="label" style="font-size:0.7rem">Arena mirror · as of ${esc(aiEvals.last_updated)}</td></tr>`;
+                }
+            } else {
+                aiHtml = `<tr><td colspan="3" class="empty-state">Live ranks unavailable${aiEvals.reason ? ' (' + esc(aiEvals.reason) + ')' : ''}</td></tr>`;
+            }
             document.getElementById('ai-evals-body').innerHTML = aiHtml;
         }
 
