@@ -30,6 +30,7 @@ tauri-plugin-shell = "2.3.5"
 ipnet = { version = "2", features = ["serde"] }
 async-stream = "0.3"
 futures-util = "0.3"
+plist = "1"
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }

@@ -95,11 +95,16 @@ function updateDOM() {
         let gpuHtml = '';
         if (stats.dynamic.extras.gpus && stats.dynamic.extras.gpus.length > 0) {
             stats.dynamic.extras.gpus.forEach(gpu => {
-                let vramText = gpu.vramTotal > 0 ? `${formatBytes(gpu.vramUsed * 1024 * 1024)} / ${formatBytes(gpu.vramTotal * 1024 * 1024)}` : 'Unified Memory';
+                // VRAM is bytes for every vendor now; null means unknown/unified.
+                let vramText = gpu.vramTotal
+                    ? `${formatBytes(gpu.vramUsed)} / ${formatBytes(gpu.vramTotal)}`
+                    : 'Unified / N/A';
+                const loadText = gpu.load != null ? `${gpu.load.toFixed(1)}%` : '--%';
+                const tempText = gpu.temp != null ? `${gpu.temp.toFixed(1)}°C` : '--°C';
                 gpuHtml += `
                     <div class="metric">
                         <span class="label">${esc(gpu.vendor)} - ${esc(gpu.model)}</span>
-                        <span class="value">${gpu.load.toFixed(1)}% | ${gpu.temp.toFixed(1)}°C</span>
+                        <span class="value">${loadText} | ${tempText}</span>
                         <span class="label">VRAM: ${vramText}</span>
                     </div>
                 `;
