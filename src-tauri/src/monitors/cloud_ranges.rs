@@ -106,15 +106,21 @@ impl Ranges {
 static RANGES: RwLock<Option<Ranges>> = RwLock::new(None);
 
 /// Returns true if the address must never be treated as egress to a cloud.
+/// IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is folded to IPv4 first so that a mapped
+/// private/loopback peer (as seen on dual-stack sockets via /proc/net/tcp6) is
+/// still recognised as local.
 pub fn is_local(ip: IpAddr) -> bool {
-    match ip {
+    match ip.to_canonical() {
         IpAddr::V4(v4) => {
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
-                || is_shared_cgnat(v4) // 100.64/10 handled separately as mesh
+            // NOTE: 100.64/10 (CGNAT / Tailscale mesh) is deliberately NOT
+            // "local" — it is egress-worthy mesh traffic that must reach the
+            // classifier (handled as Tailscale in classify()). Treating it as
+            // local here would make the egress reader drop all mesh connections.
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -142,6 +148,10 @@ fn is_ipv6_unique_local(v6: Ipv6Addr) -> bool {
 /// Classify a destination IP. Order: local exclusion -> CGNAT/mesh -> published
 /// cloud prefixes -> unknown-but-public. Never panics; always returns something.
 pub fn classify(ip: IpAddr) -> Classification {
+    // Fold IPv4-mapped IPv6 (::ffff:a.b.c.d) to IPv4 so CGNAT detection and the
+    // (IPv4) cloud prefix tables match; otherwise a mapped cloud IP seen on a
+    // dual-stack socket is misclassified as Unknown/public.
+    let ip = ip.to_canonical();
     if let IpAddr::V4(v4) = ip {
         if is_shared_cgnat(v4) {
             return Classification {
@@ -383,6 +393,28 @@ mod tests {
         let c = classify(ip("198.51.100.7")); // TEST-NET-2, public-ish, unlisted
         assert_eq!(c.provider, Provider::Unknown);
         assert!(c.provider.egress_usd_per_gb().is_none());
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_is_canonicalized_before_classify() {
+        // ::ffff:52.94.0.5 must classify as AWS (via fallback 52.0.0.0/8),
+        // not Unknown — regression for dual-stack sockets recording the mapped
+        // form in /proc/net/tcp6.
+        assert_eq!(classify(ip("::ffff:52.94.0.5")).provider, Provider::Aws);
+        // Mapped private / loopback must be recognised as local.
+        assert_eq!(classify(ip("::ffff:10.0.0.1")).provider, Provider::Private);
+        assert!(is_local(ip("::ffff:192.168.1.1")));
+        assert!(is_local(ip("::ffff:127.0.0.1")));
+        // Mapped CGNAT must be Tailscale (and reach the classifier, not Private).
+        assert_eq!(classify(ip("::ffff:100.64.5.5")).provider, Provider::Tailscale);
+    }
+
+    #[test]
+    fn cgnat_is_not_local_so_egress_keeps_mesh() {
+        // Regression: is_local() must NOT treat 100.64/10 as local, or the
+        // egress reader would filter out every Tailscale mesh connection.
+        assert!(!is_local(ip("100.112.55.21")));
+        assert_eq!(classify(ip("100.112.55.21")).provider, Provider::Tailscale);
     }
 
     #[test]
