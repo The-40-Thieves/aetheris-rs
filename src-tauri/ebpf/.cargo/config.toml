@@ -1,0 +1,13 @@
+# NOTE: when built via the app's build.rs, CARGO_ENCODED_RUSTFLAGS is set with the
+# arch derived from CARGO_CFG_TARGET_ARCH and OVERRIDES the `rustflags` below, so
+# the real build is correct on any host. The aarch64 value here is only a fallback
+# for standalone `cargo build` in this directory (debugging on an aarch64 box).
+[build]
+target = "bpfel-unknown-none"
+rustflags = ["--cfg", "bpf_target_arch=\"aarch64\"", "-C", "debuginfo=2", "-C", "link-arg=--btf"]
+
+[unstable]
+build-std = ["core"]
+
+[target.bpfel-unknown-none]
+linker = "bpf-linker"
