@@ -129,11 +129,14 @@ function updateDOM() {
             stats.dynamic.extras.smartDisks.forEach(disk => {
                 let rul = disk.rul || {};
                 let estDate = rul.estimatedEndOfLife ? new Date(rul.estimatedEndOfLife).toLocaleDateString() : 'N/A';
+                // Mark projections that fall back to the default velocity (too
+                // little history) so they aren't mistaken for a measured trend.
+                let estMark = rul.confidence === 'low' ? ' (est.)' : '';
                 storageHtml += `
                     <div class="metric highlight">
-                        <span class="label">${disk.device} - ${disk.model}</span>
-                        <span class="value">SOH: ${rul.healthPercent ? rul.healthPercent.toFixed(2) : '--'}%</span>
-                        <span class="label" style="color: var(--warning)">Est. EOL: ${estDate}</span>
+                        <span class="label">${esc(disk.device)} - ${esc(disk.model)}</span>
+                        <span class="value">SOH: ${rul.healthPercent != null ? rul.healthPercent.toFixed(2) : '--'}%</span>
+                        <span class="label" style="color: var(--warning)">Est. EOL: ${estDate}${estMark}</span>
                         <span class="label">Written: ${formatBytes(disk.bytesWritten)}</span>
                     </div>
                 `;
@@ -157,11 +160,12 @@ function updateDOM() {
             stats.dynamic.extras.batteries.forEach(batt => {
                 let rul = batt.rul || {};
                 let estDate = rul.estimatedEndOfLife ? new Date(rul.estimatedEndOfLife).toLocaleDateString() : 'N/A';
+                let estMark = rul.confidence === 'low' ? ' (est.)' : '';
                 battHtml += `
                     <div class="metric highlight">
                         <span class="label">SOH: ${batt.stateOfHealth.toFixed(1)}% | Cycles: ${batt.cycleCount}</span>
-                        <span class="value">${batt.stateOfCharge.toFixed(1)}% (${batt.state})</span>
-                        <span class="label" style="color: var(--warning)">Est. End of Optimal Life: ${estDate}</span>
+                        <span class="value">${batt.stateOfCharge.toFixed(1)}% (${esc(batt.state)})</span>
+                        <span class="label" style="color: var(--warning)">Est. End of Optimal Life: ${estDate}${estMark}</span>
                     </div>
                 `;
             });

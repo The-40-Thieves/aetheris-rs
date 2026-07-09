@@ -306,7 +306,12 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
                 "batteries": monitors::battery::get_battery_stats().into_iter().map(|mut batt| {
                     let soh = batt["stateOfHealth"].as_f64().unwrap_or(100.0);
                     let cc = batt["cycleCount"].as_i64().unwrap_or(0) as i32;
-                    batt["rul"] = analytics::rul::calculate_battery_rul(&state.db, soh, cc);
+                    let ctx = format!(
+                        "{} {}",
+                        batt["vendor"].as_str().unwrap_or("Unknown"),
+                        batt["model"].as_str().unwrap_or("Unknown")
+                    );
+                    batt["rul"] = analytics::rul::calculate_battery_rul(&state.db, &ctx, soh, cc);
                     batt
                 }).collect::<Vec<_>>(),
                 "aiProxy": {
