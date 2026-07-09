@@ -20,6 +20,10 @@ const SSD_WINDOW_DAYS: i64 = 30;
 const BATTERY_WINDOW_DAYS: i64 = 60;
 /// Minimum span of real history before we trust a measured velocity.
 const MIN_HISTORY_DAYS: f64 = 7.0;
+/// Battery SOH is typically reported at 1% (integer) resolution, so a 1-point
+/// change over a week is quantization noise, not wear. Require the cumulative
+/// measured decline to clearly exceed that resolution before projecting from it.
+const MIN_BATTERY_SOH_DROP: f64 = 2.0;
 /// Documented fallback SSD write rate used only when history is too short.
 const DEFAULT_SSD_WRITE_BYTES_PER_DAY: f64 = 50.0 * 1024.0 * 1024.0 * 1024.0;
 /// Cap projected life so display dates and chrono math stay sane (~100 yrs).
@@ -72,18 +76,7 @@ pub fn calculate_battery_rul(db: &Database, context: &str, current_soh: f64, cyc
     let _ = db.insert_metric_if_stale("battery_soh", current_soh, context, SAMPLE_INTERVAL_SECS);
 
     let series = db.metric_series("battery_soh", context, BATTERY_WINDOW_DAYS);
-
-    // Real projection: SOH decline per day from history -> days until 80%.
-    let (days_remaining, confidence) = match declining_velocity_per_day(&series) {
-        Some((soh_per_day, days))
-            if days >= MIN_HISTORY_DAYS && soh_per_day > 0.0 && current_soh > 80.0 =>
-        {
-            ((current_soh - 80.0) / soh_per_day, "high")
-        }
-        // Fallback: cycle-based extrapolation assuming ~1 cycle/day.
-        _ => (fallback_battery_days(current_soh, cycle_count), "low"),
-    };
-
+    let (days_remaining, confidence) = battery_projection(&series, current_soh, cycle_count);
     let days_remaining = days_remaining.clamp(0.0, MAX_PROJECTION_DAYS);
     let eol_date = Utc::now() + Duration::days(days_remaining as i64);
 
@@ -94,6 +87,24 @@ pub fn calculate_battery_rul(db: &Database, context: &str, current_soh: f64, cyc
         "confidence": confidence,
         "historySamples": series.len(),
     })
+}
+
+/// Decide days-to-80%-SOH and a confidence label from SOH history. Trusts the
+/// measured slope only when the window is long enough AND the cumulative decline
+/// exceeds SOH reporting resolution (so integer-quantization jitter isn't
+/// mistaken for real wear and projected as an imminent EOL); otherwise falls
+/// back to the cycle-based estimate at low confidence.
+fn battery_projection(series: &[(i64, f64)], current_soh: f64, cycle_count: i32) -> (f64, &'static str) {
+    match declining_velocity_per_day(series) {
+        Some((soh_per_day, days))
+            if days >= MIN_HISTORY_DAYS
+                && current_soh > 80.0
+                && soh_per_day * days >= MIN_BATTERY_SOH_DROP =>
+        {
+            ((current_soh - 80.0) / soh_per_day, "high")
+        }
+        _ => (fallback_battery_days(current_soh, cycle_count), "low"),
+    }
 }
 
 /// Cycle-based fallback (the old model), in *days* assuming ~1 cycle/day.
@@ -178,6 +189,21 @@ mod tests {
         assert_eq!(r["confidence"], "low");
         assert!(r["healthPercent"].as_f64().unwrap() > 0.0);
         assert_eq!(db.count_metric("ssd_bytes_written"), 1, "history sample was recorded");
+    }
+
+    #[test]
+    fn battery_projection_rejects_quantization_noise() {
+        // 1-point SOH drop over 10 days = quantization noise -> low confidence.
+        let noisy = vec![(0, 96.0), (10 * 86_400, 95.0)];
+        assert_eq!(battery_projection(&noisy, 95.0, 100).1, "low");
+        // 5-point drop over 10 days = real wear -> high; to 80 from 95 @0.5/day = 30d.
+        let real = vec![(0, 100.0), (10 * 86_400, 95.0)];
+        let (days, conf) = battery_projection(&real, 95.0, 100);
+        assert_eq!(conf, "high");
+        assert!((days - 30.0).abs() < 0.5, "days={days}");
+        // Big drop but too little history -> low.
+        let short = vec![(0, 100.0), (3 * 86_400, 90.0)];
+        assert_eq!(battery_projection(&short, 90.0, 100).1, "low");
     }
 
     #[test]
