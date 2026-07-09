@@ -216,6 +216,26 @@ function updateDOM() {
         }
         document.getElementById('egress-body').innerHTML = egressHtml;
 
+        // --- Egress accounting mode + per-process totals (eBPF) ---
+        const acct = stats.dynamic.extras.egressAccounting;
+        const acctEl = document.getElementById('egress-accounting');
+        if (acctEl) {
+            acctEl.innerText = acct === 'ebpf' ? '· eBPF per-PID accounting' : '· socket-level (ss)';
+            acctEl.style.color = acct === 'ebpf' ? 'var(--success)' : 'var(--text-muted, inherit)';
+        }
+        const byProc = stats.dynamic.extras.egressByProcess || [];
+        const bpEl = document.getElementById('egress-by-process');
+        if (bpEl) {
+            if (byProc.length > 0) {
+                bpEl.innerHTML = '<h3>Top egress by process (true per-PID, eBPF)</h3>' + byProc.map(p =>
+                    `<div class="metric"><span class="label">${esc(p.process || ('pid ' + p.pid))}</span>`
+                    + `<span class="value">${formatBytes(p.bytesSent)}</span></div>`
+                ).join('');
+            } else {
+                bpEl.innerHTML = '';
+            }
+        }
+
         // --- Containers ---
         const cw = (stats.dynamic.extras && stats.dynamic.extras.containers) || {};
         let contHtml = '';

@@ -53,6 +53,17 @@ per-process egress attribution, and local LLM inference observability.
 - Egress cost = real bytes × provider $/GB; mesh traffic is free; unattributed
   destinations report `null` cost rather than a fabricated figure. When nothing
   qualifies it returns an empty list.
+- **True per-PID byte accounting (eBPF, opt-in).** Built with `--features ebpf`
+  and run with root / `CAP_BPF`+`CAP_NET_ADMIN`, an aya (pure-Rust eBPF) probe
+  attaches kprobes to `tcp_sendmsg`/`udp_sendmsg` and accumulates a per-process
+  `pid -> bytes` map — giving cumulative egress totals *including* short-lived /
+  already-closed sockets and daemons with no currently-tracked connection, which
+  the `ss` view cannot see. Surfaced as `extras.egressByProcess` with the mode in
+  `extras.egressAccounting` (`"ebpf"` vs `"sockets"`). It counts application-layer
+  payload bytes (the `sendmsg` size), not wire bytes (no IP/TCP headers or
+  retransmits). Without the feature or without privilege it is a silent no-op and
+  the socket-level view is used — never fabricated. Building the probe needs a
+  nightly toolchain with `rust-src` and `bpf-linker`; see `src-tauri/ebpf/`.
 
 ### External baselines
 - **LLM leaderboard ranks** fetched live from the Arena community mirror and
@@ -93,13 +104,6 @@ per-process egress attribution, and local LLM inference observability.
 
 ## Roadmap (planned, not yet implemented)
 
-- **eBPF egress byte accounting (Linux).** The current `/proc`+`ss` reader sees
-  live sockets only. True per-PID byte accounting across short-lived/closed
-  sockets needs an in-kernel probe. The intended design uses [aya](https://aya-rs.dev)
-  (pure-Rust eBPF, `CgroupSkb` egress hook) — requires root/`CAP_BPF`
-  (+`CAP_NET_ADMIN`), kernel 5.8+, and a `bpf-linker` toolchain. Prior art:
-  [domcyrus/rustnet](https://github.com/domcyrus/rustnet) (Apache-2.0), cited for
-  its cross-platform per-process-attribution design — no code copied.
 - **macOS / Windows egress** via PKTAP and `GetExtendedTcpTable` respectively.
 - **CI-integrated DORA** (real change-failure-rate / MTTR from a CI provider API).
 - **Live SaaS pricing** (currently curated static reference).
