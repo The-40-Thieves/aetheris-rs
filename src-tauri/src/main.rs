@@ -1,12 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-use serde_json::json;
-use sysinfo::{
-    CpuRefreshKind, MemoryRefreshKind, ProcessRefreshKind,
-    System, Networks, Disks, Components,
-};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use serde_json::{json, Value};
+use sysinfo::{System, Networks, Disks, Components};
 
 mod database;
 mod monitors;
@@ -15,12 +12,54 @@ mod server;
 
 use std::sync::Arc;
 
+/// A cached value with the instant it was produced.
+struct Cached {
+    at: Instant,
+    val: Value,
+}
+
+/// Per-category caches for the slow-changing / subprocess-spawning parts of
+/// get_stats, so a 1 Hz poll doesn't run smartctl / nvidia-smi / a /proc scan
+/// every second. Fast metrics (CPU/mem/net/processes/sensors) are never cached.
+#[derive(Default)]
+struct Caches {
+    inventory: Mutex<Option<Cached>>, // ais + toolchains + vpns + apps (5 min)
+    gpus: Mutex<Option<Cached>>,      // 30 s
+    smart_disks: Mutex<Option<Cached>>, // 60 s
+    batteries: Mutex<Option<Cached>>, // 30 s
+    egress: Mutex<Option<Cached>>,    // 5 s (expensive /proc/*/fd scan)
+    baselines: Mutex<Option<Cached>>, // 60 s
+}
+
+/// Return the cached value if still fresh, else recompute via `f`, store it, and
+/// return it. Cloning a cached serde_json::Value is far cheaper than respawning
+/// the subprocess / rescanning that produced it.
+fn cached(slot: &Mutex<Option<Cached>>, ttl: Duration, f: impl FnOnce() -> Value) -> Value {
+    let mut guard = slot.lock().unwrap();
+    if let Some(c) = guard.as_ref() {
+        if c.at.elapsed() < ttl {
+            return c.val.clone();
+        }
+    }
+    let val = f();
+    *guard = Some(Cached { at: Instant::now(), val: val.clone() });
+    val
+}
+
+const TTL_INVENTORY: Duration = Duration::from_secs(300);
+const TTL_GPU: Duration = Duration::from_secs(30);
+const TTL_SMART: Duration = Duration::from_secs(60);
+const TTL_BATTERY: Duration = Duration::from_secs(30);
+const TTL_EGRESS: Duration = Duration::from_secs(5);
+const TTL_BASELINES: Duration = Duration::from_secs(60);
+
 struct AppState {
     sys: Mutex<System>,
     networks: Mutex<Networks>,
     disks: Mutex<Disks>,
     components: Mutex<Components>,
     db: Arc<database::Database>,
+    caches: Caches,
 }
 
 fn detect_ais(sys: &System) -> Vec<serde_json::Value> {
@@ -232,6 +271,43 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
         })
     }).collect();
 
+    // Cache the slow-changing / subprocess-spawning extras by change-rate so a
+    // 1 Hz poll doesn't respawn smartctl/nvidia-smi or rescan /proc every second.
+    let inventory = cached(&state.caches.inventory, TTL_INVENTORY, || json!({
+        "ais": detect_ais(&sys),
+        "toolchains": detect_toolchains(),
+        "vpns": scan_vpn_mesh(&sys),
+        "apps": scan_applications(),
+    }));
+    let gpus = cached(&state.caches.gpus, TTL_GPU, || json!(monitors::gpu::get_gpu_stats()));
+    let smart_disks = cached(&state.caches.smart_disks, TTL_SMART, || {
+        json!(monitors::smart_disk::get_smart_data().into_iter().map(|mut disk| {
+            let model = disk["model"].as_str().unwrap_or("Unknown").to_string();
+            let bw = disk["bytesWritten"].as_f64().unwrap_or(0.0);
+            disk["rul"] = analytics::rul::calculate_ssd_rul(&state.db, &model, bw);
+            disk
+        }).collect::<Vec<_>>())
+    });
+    let batteries = cached(&state.caches.batteries, TTL_BATTERY, || {
+        json!(monitors::battery::get_battery_stats().into_iter().map(|mut batt| {
+            let soh = batt["stateOfHealth"].as_f64().unwrap_or(100.0);
+            let cc = batt["cycleCount"].as_i64().unwrap_or(0) as i32;
+            let ctx = format!(
+                "{} {}",
+                batt["vendor"].as_str().unwrap_or("Unknown"),
+                batt["model"].as_str().unwrap_or("Unknown")
+            );
+            batt["rul"] = analytics::rul::calculate_battery_rul(&state.db, &ctx, soh, cc);
+            batt
+        }).collect::<Vec<_>>())
+    });
+    let egress = cached(&state.caches.egress, TTL_EGRESS, || {
+        json!(monitors::network_topology::get_egress_topology(&state.db))
+    });
+    let baselines = cached(&state.caches.baselines, TTL_BASELINES, || {
+        monitors::external_baselines::get_external_baselines(&state.db)
+    });
+
     json!({
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
         "static": {
@@ -292,41 +368,53 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
             },
             "extras": {
                 "sensors": sensor_stats,
-                "ais": detect_ais(&sys),
-                "toolchains": detect_toolchains(),
-                "vpns": scan_vpn_mesh(&sys),
-                "apps": scan_applications(),
-                "gpus": monitors::gpu::get_gpu_stats(),
-                "smartDisks": monitors::smart_disk::get_smart_data().into_iter().map(|mut disk| {
-                    let model = disk["model"].as_str().unwrap_or("Unknown").to_string();
-                    let bw = disk["bytesWritten"].as_f64().unwrap_or(0.0);
-                    disk["rul"] = analytics::rul::calculate_ssd_rul(&state.db, &model, bw);
-                    disk
-                }).collect::<Vec<_>>(),
-                "batteries": monitors::battery::get_battery_stats().into_iter().map(|mut batt| {
-                    let soh = batt["stateOfHealth"].as_f64().unwrap_or(100.0);
-                    let cc = batt["cycleCount"].as_i64().unwrap_or(0) as i32;
-                    let ctx = format!(
-                        "{} {}",
-                        batt["vendor"].as_str().unwrap_or("Unknown"),
-                        batt["model"].as_str().unwrap_or("Unknown")
-                    );
-                    batt["rul"] = analytics::rul::calculate_battery_rul(&state.db, &ctx, soh, cc);
-                    batt
-                }).collect::<Vec<_>>(),
+                "ais": inventory["ais"].clone(),
+                "toolchains": inventory["toolchains"].clone(),
+                "vpns": inventory["vpns"].clone(),
+                "apps": inventory["apps"].clone(),
+                "gpus": gpus,
+                "smartDisks": smart_disks,
+                "batteries": batteries,
                 "aiProxy": {
                     "proxyAddr": "127.0.0.1:3030",
                     "lastTokensPerSec": state.db.latest_metric("ai_tokens_per_sec"),
                     "samples": state.db.count_metric("ai_tokens_per_sec")
                 },
-                "egressTopology": monitors::network_topology::get_egress_topology(&state.db),
-                "externalBaselines": monitors::external_baselines::get_external_baselines(&state.db),
+                "egressTopology": egress,
+                "externalBaselines": baselines,
                 "plur": {},
                 "containers": [],
                 "outpostStats": {}
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn cached_recomputes_only_after_ttl() {
+        let slot: Mutex<Option<Cached>> = Mutex::new(None);
+        let calls = AtomicUsize::new(0);
+        let run = |ttl: Duration| {
+            cached(&slot, ttl, || {
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                json!(format!("v{n}"))
+            })
+        };
+
+        // First call computes and caches.
+        assert_eq!(run(Duration::from_secs(60)), "v0");
+        // Within TTL: returns cache, does NOT recompute.
+        assert_eq!(run(Duration::from_secs(60)), "v0");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Zero TTL: the cached entry is immediately stale -> recompute.
+        assert_eq!(run(Duration::from_secs(0)), "v1");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
 }
 
 fn main() {
@@ -366,6 +454,7 @@ fn main() {
             disks: Mutex::new(Disks::new_with_refreshed_list()),
             components: Mutex::new(Components::new_with_refreshed_list()),
             db,
+            caches: Caches::default(),
         })
         .invoke_handler(tauri::generate_handler![get_stats])
         .run(tauri::generate_context!())
