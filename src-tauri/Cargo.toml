@@ -36,6 +36,15 @@ bollard = "0.21"
 # cross-platform stable build is unaffected; enable with `--features ebpf`.
 aya = { version = "0.14", optional = true }
 
+# Windows egress reader (IP Helper API). cfg-gated so it's only pulled on Windows.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_Threading",
+] }
+
 [features]
 # Compile + embed the eBPF egress probe and enable the runtime loader.
 # Requires: Linux, a nightly toolchain with rust-src, and bpf-linker installed.

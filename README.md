@@ -82,7 +82,13 @@ per-process egress attribution, and local LLM inference observability.
   MTTR = median time from a failing run to the next passing run. Falls back to
   *n/a* (never fabricated) when there's no repo, token, or CI runs.
 - **Chip Tjmax limits and SaaS pricing** are genuinely static reference data and
-  are labelled as such (`as_of` + `source`).
+  are labelled as such (`as_of` + `source`). Observability-tool pricing is kept
+  static on purpose, not for lack of trying: no vendor (Datadog, New Relic,
+  Grafana Cloud, Dynatrace) exposes a public list-price API, their pricing pages
+  sit behind bot protection, and their unit models (per-host vs per-GB vs
+  per-GiB-hr vs per-series) aren't comparable without a fixed reference workload —
+  so a "live" pricing comparison would be fabricated precision. It stays a
+  labelled reference table rather than a fake live feed.
 
 ### Containers (Linux/any Docker host)
 - Real per-container telemetry via the Docker CLI (auto-falling back to the
@@ -107,15 +113,26 @@ per-process egress attribution, and local LLM inference observability.
 | GPU (NVIDIA/AMD/Apple)  |  ✅   |  ✅¹  |   ✅    |
 | SMART / battery         |  ✅   |  ✅   |   ✅    |
 | AI proxy                |  ✅   |  ✅   |   ✅    |
-| Egress topology         |  ✅   |  🔜   |   🔜    |
+| Egress topology         |  ✅   |  ✅²  |   ✅²   |
 | Containers              |  ✅   |  ✅   |   ✅    |
 
 ¹ Apple GPU via `powermetrics` (requires root).
+² Connection-level (owning process + endpoints, no byte counts) via `lsof` on
+macOS and `GetExtendedTcpTable` on Windows. The Linux reader additionally gets
+per-socket bytes (ss) and true per-PID totals (eBPF). The Windows FFI is
+compile-verified against the `windows` crate; the macOS parser is unit-tested;
+neither is runtime-verified on its OS from this Linux build host.
 
-## Roadmap (planned, not yet implemented)
+## Roadmap
 
-- **macOS / Windows egress** via PKTAP and `GetExtendedTcpTable` respectively.
-- **Live SaaS pricing** (currently curated static reference).
+The original roadmap (real egress / AI proxy / RUL / GPU / live baselines,
+container monitoring, eBPF per-PID egress accounting, CI-integrated DORA, and
+macOS/Windows egress) is **complete**. Live SaaS-pricing comparison was
+investigated and deliberately **not** built — see the baselines note above.
+
+Genuine future work (not started): a per-CPU eBPF map to remove the concurrent
+under-count, macOS PKTAP / Windows ETW for per-process *byte* counts, and
+container control (start/stop) beyond read-only telemetry.
 
 ## Requirements
 

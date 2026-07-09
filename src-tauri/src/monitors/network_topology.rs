@@ -15,15 +15,264 @@
 //! accounting across short-lived / already-closed sockets is out of reach for
 //! `/proc`+`ss` and is the job of the eBPF probe on the roadmap (see README).
 //!
-//! macOS and Windows are not implemented yet and return an empty list rather
-//! than a mock (see roadmap).
+//! macOS reads connections from `lsof -nP -i -F` (unprivileged; connections +
+//! owning PID, no byte counts). Windows reads them from `GetExtendedTcpTable`
+//! (owner-PID table via the IP Helper API). Both classify the remote and report
+//! `bytes_sent: null` (those sources give no bytes); on Linux the eBPF probe can
+//! still supply true per-PID totals.
 
 use serde_json::{json, Value};
 use std::sync::Arc;
 use crate::database::Database;
 use crate::monitors::cloud_ranges;
 
-/// One established outbound connection with real telemetry.
+// --- macOS: lsof -F reader ----------------------------------------------------
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    pub fn collect() -> Vec<Value> {
+        // -n numeric IPs, -P numeric ports, -i internet only, -F field output.
+        // `f` MUST be requested — it is the per-socket delimiter.
+        let out = match std::process::Command::new("lsof")
+            .args(["-nP", "-w", "-i", "-F", "pcfnPtT"])
+            .output()
+        {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => return Vec::new(),
+        };
+        super::parse_lsof(&String::from_utf8_lossy(&out))
+    }
+}
+
+/// Parse a host:port token ("1.2.3.4:443" or "[2606:4700::1]:443") to (ip,port).
+#[cfg(any(target_os = "macos", test))]
+fn parse_hostport(s: &str) -> Option<(std::net::IpAddr, u16)> {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix('[') {
+        let (ip, port) = rest.split_once("]:")?;
+        return Some((ip.parse().ok()?, port.parse().ok()?));
+    }
+    let (ip, port) = s.rsplit_once(':')?;
+    Some((ip.parse().ok()?, port.parse().ok()?))
+}
+
+/// Parse `lsof -nP -i -F pcfnPtT` output into egress connection JSON. State
+/// machine: `p` starts a process, `f` starts a socket, `P`/`n`/`T` decorate it.
+/// Only established TCP (and UDP with a remote peer) to non-local hosts are kept.
+#[cfg(any(target_os = "macos", test))]
+fn parse_lsof(text: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut pid: Option<u32> = None;
+    let mut cmd: Option<String> = None;
+    let mut proto = String::new();
+    let mut name = String::new();
+    let mut state = String::new();
+    let mut in_socket = false;
+
+    fn flush(
+        out: &mut Vec<Value>,
+        pid: Option<u32>,
+        cmd: &Option<String>,
+        proto: &str,
+        name: &str,
+        state: &str,
+    ) {
+        // Only connected sockets (local->remote); listeners/unconnected UDP have no "->".
+        let remote = match name.split_once("->") {
+            Some((_, r)) => r,
+            None => return,
+        };
+        // TCP must be ESTABLISHED; UDP has no state line (state empty => keep).
+        if proto == "TCP" && !state.is_empty() && state != "ESTABLISHED" {
+            return;
+        }
+        if let Some((ip, port)) = parse_hostport(remote) {
+            let st = if state.is_empty() { "ESTABLISHED" } else { state };
+            if let Some(v) = conn_json(cmd.clone(), pid, ip, port, st) {
+                out.push(v);
+            }
+        }
+    }
+
+    for line in text.lines() {
+        let tag = match line.chars().next() {
+            Some(c) => c,
+            None => continue,
+        };
+        let val = &line[tag.len_utf8()..];
+        match tag {
+            'p' => {
+                if in_socket {
+                    flush(&mut out, pid, &cmd, &proto, &name, &state);
+                    in_socket = false;
+                }
+                pid = val.parse().ok();
+                cmd = None;
+                proto.clear();
+                name.clear();
+                state.clear();
+            }
+            'c' => cmd = Some(val.to_string()),
+            'f' => {
+                if in_socket {
+                    flush(&mut out, pid, &cmd, &proto, &name, &state);
+                }
+                proto.clear();
+                name.clear();
+                state.clear();
+                in_socket = true;
+            }
+            'P' => proto = val.to_string(),
+            'n' => name = val.to_string(),
+            'T' => {
+                if let Some(st) = val.strip_prefix("ST=") {
+                    state = st.to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    if in_socket {
+        flush(&mut out, pid, &cmd, &proto, &name, &state);
+    }
+    out
+}
+
+// --- Windows: GetExtendedTcpTable reader --------------------------------------
+
+#[cfg(target_os = "windows")]
+mod windows {
+    use super::*;
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::ptr::addr_of;
+    use ::windows::core::PWSTR;
+    use ::windows::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, NO_ERROR};
+    use ::windows::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID, MIB_TCPROW_OWNER_PID,
+        MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_ALL,
+    };
+    use ::windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+    use ::windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    const MIB_TCP_STATE_ESTAB: u32 = 5;
+
+    /// Ports are network byte order in the low 16 bits of a DWORD.
+    fn ntohs(dw: u32) -> u16 {
+        u16::from_be_bytes([(dw & 0xff) as u8, ((dw >> 8) & 0xff) as u8])
+    }
+
+    /// Two-call idiom + 4-byte-aligned Vec<u32> backing buffer.
+    unsafe fn fetch_aligned(
+        mut call: impl FnMut(Option<*mut c_void>, *mut u32) -> u32,
+    ) -> Option<Vec<u32>> {
+        let mut size: u32 = 0;
+        let r = call(None, &mut size);
+        if r != ERROR_INSUFFICIENT_BUFFER.0 && r != NO_ERROR.0 {
+            return None;
+        }
+        if size == 0 {
+            return Some(Vec::new());
+        }
+        let words = (size as usize + 3) / 4;
+        let mut buf = vec![0u32; words];
+        let r = call(Some(buf.as_mut_ptr() as *mut c_void), &mut size);
+        if r != NO_ERROR.0 {
+            return None;
+        }
+        Some(buf)
+    }
+
+    /// (remote_ip, remote_port, owning_pid) for each ESTABLISHED TCP connection.
+    unsafe fn established_tcp() -> Vec<(IpAddr, u16, u32)> {
+        let mut out = Vec::new();
+        // IPv4
+        if let Some(buf) = fetch_aligned(|ptr, size| {
+            GetExtendedTcpTable(ptr, size, false, AF_INET.0 as u32, TCP_TABLE_OWNER_PID_ALL, 0)
+        }) {
+            if !buf.is_empty() {
+                let table = buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID;
+                let rows = addr_of!((*table).table) as *const MIB_TCPROW_OWNER_PID;
+                for i in 0..(*table).dwNumEntries as usize {
+                    let row = &*rows.add(i);
+                    if row.dwState != MIB_TCP_STATE_ESTAB {
+                        continue;
+                    }
+                    let ip = IpAddr::V4(Ipv4Addr::from(row.dwRemoteAddr.to_le_bytes()));
+                    out.push((ip, ntohs(row.dwRemotePort), row.dwOwningPid));
+                }
+            }
+        }
+        // IPv6
+        if let Some(buf) = fetch_aligned(|ptr, size| {
+            GetExtendedTcpTable(ptr, size, false, AF_INET6.0 as u32, TCP_TABLE_OWNER_PID_ALL, 0)
+        }) {
+            if !buf.is_empty() {
+                let table = buf.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID;
+                let rows = addr_of!((*table).table) as *const MIB_TCP6ROW_OWNER_PID;
+                for i in 0..(*table).dwNumEntries as usize {
+                    let row = &*rows.add(i);
+                    if row.dwState != MIB_TCP_STATE_ESTAB {
+                        continue;
+                    }
+                    let ip = IpAddr::V6(Ipv6Addr::from(row.ucRemoteAddr));
+                    out.push((ip, ntohs(row.dwRemotePort), row.dwOwningPid));
+                }
+            }
+        }
+        out
+    }
+
+    /// PID -> executable file name via Win32 (needs no elevation, no extra crate).
+    fn pid_to_name(pid: u32) -> Option<String> {
+        if pid == 0 {
+            return None;
+        }
+        unsafe {
+            let handle: HANDLE =
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let mut buf = vec![0u16; 32_768];
+            let mut len = buf.len() as u32;
+            let res = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            );
+            let _ = CloseHandle(handle);
+            res.ok()?;
+            let path = String::from_utf16_lossy(&buf[..len as usize]);
+            // Just the file name, matching the lsof/`comm` style used elsewhere.
+            Some(
+                path.rsplit(['\\', '/'])
+                    .next()
+                    .unwrap_or(&path)
+                    .to_string(),
+            )
+        }
+    }
+
+    pub fn collect() -> Vec<Value> {
+        let conns = unsafe { established_tcp() };
+        let mut names: HashMap<u32, Option<String>> = HashMap::new();
+        let mut out = Vec::new();
+        for (remote_ip, remote_port, pid) in conns {
+            let name = names.entry(pid).or_insert_with(|| pid_to_name(pid)).clone();
+            if let Some(v) = conn_json(name, Some(pid), remote_ip, remote_port, "ESTABLISHED") {
+                out.push(v);
+            }
+        }
+        out
+    }
+}
+
+/// One established outbound connection with real telemetry (Linux reader).
+#[cfg(target_os = "linux")]
 struct Conn {
     pid: Option<u32>,
     process: Option<String>,
@@ -40,11 +289,55 @@ pub fn get_egress_topology(_db: &Arc<Database>) -> Vec<Value> {
     {
         linux::collect()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::collect()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::collect()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         // Honest empty state: no fabricated connections on unsupported platforms.
         Vec::new()
     }
+}
+
+/// Build a connection JSON for the macOS/Windows readers, which supply the
+/// endpoints + owning process but no byte counts. Shape matches the Linux
+/// reader (minus real bytes). Classifies the remote and never fabricates bytes
+/// or cost. Returns None for local/loopback remotes (not egress).
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn conn_json(
+    process: Option<String>,
+    pid: Option<u32>,
+    remote_ip: std::net::IpAddr,
+    remote_port: u16,
+    state: &str,
+) -> Option<Value> {
+    if cloud_ranges::is_local(remote_ip) {
+        return None;
+    }
+    let class = cloud_ranges::classify(remote_ip);
+    let provider = class.provider;
+    let cost = if provider.is_mesh() { Some(0.0) } else { None::<f64> };
+    Some(json!({
+        "process": process.unwrap_or_else(|| "unknown".to_string()),
+        "pid": pid,
+        "destination_ip": remote_ip.to_string(),
+        "destination_name": class.detail,
+        "destination_port": remote_port,
+        "provider": provider.label(),
+        "is_mesh": provider.is_mesh(),
+        "state": state,
+        "bytes_sent": Option::<u64>::None,
+        "bytes_acked": Option::<u64>::None,
+        "estimated_cost_usd": cost,
+        "attribution_confidence": if cloud_ranges::is_fallback() { "fallback" } else { "live" },
+        "byte_accounting": "unavailable",
+        "shadow_alert": pid.is_none() && provider.egress_usd_per_gb().is_some(),
+    }))
 }
 
 #[cfg(target_os = "linux")]
@@ -399,5 +692,64 @@ ESTAB 0 0 10.0.0.1:50002 140.82.112.4:443
                 assert!(c["estimated_cost_usd"].is_number() || c["estimated_cost_usd"].is_null());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod macos_parser_tests {
+    use super::*;
+
+    #[test]
+    fn parse_lsof_extracts_egress_and_skips_local() {
+        let sample = "\
+p1234
+cSafari
+f10
+PTCP
+tIPv4
+n192.168.1.5:52345->140.82.112.3:443
+TST=ESTABLISHED
+f11
+PTCP
+tIPv4
+n10.0.0.1:52346->127.0.0.1:8080
+TST=ESTABLISHED
+f12
+PTCP
+tIPv4
+n10.0.0.1:52347->140.82.112.9:443
+TST=SYN_SENT
+p5678
+ccurl
+f3
+PTCP
+tIPv4
+n10.0.0.2:60001->34.149.66.137:443
+TST=ESTABLISHED
+f4
+PUDP
+tIPv4
+n10.0.0.2:5353->8.8.8.8:53
+p999
+cmDNSResponder
+f8
+PUDP
+tIPv4
+n*:5353";
+        let conns = parse_lsof(sample);
+        // Kept: Safari->140.82.112.3 (ESTAB), curl->34.149.66.137 (ESTAB),
+        // curl->8.8.8.8 (UDP, no state). Skipped: ->127.0.0.1 (loopback),
+        // ->140.82.112.9 (SYN_SENT, not established), *:5353 (no remote).
+        assert_eq!(conns.len(), 3, "got {:?}", conns);
+        let dests: Vec<&str> = conns.iter().map(|c| c["destination_ip"].as_str().unwrap()).collect();
+        assert!(dests.contains(&"140.82.112.3"));
+        assert!(dests.contains(&"34.149.66.137"));
+        assert!(dests.contains(&"8.8.8.8"));
+        assert!(!dests.contains(&"127.0.0.1"));
+        // bytes are honestly null (lsof gives no counters).
+        assert!(conns.iter().all(|c| c["bytes_sent"].is_null()));
+        // process name comes from the `c` line (full, untruncated).
+        let safari = conns.iter().find(|c| c["destination_ip"] == "140.82.112.3").unwrap();
+        assert_eq!(safari["process"], "Safari");
     }
 }
