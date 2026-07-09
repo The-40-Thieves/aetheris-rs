@@ -5,6 +5,8 @@
 //! later tasks on this branch. Until then `Container` and the parsers below
 //! are unused from the crate's perspective, hence the `dead_code` allows.
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Serialize, Default, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +38,7 @@ pub struct Container {
 
 /// Parse a docker size string ("23.43MiB", "1.11MB", "401kB", "0B") to bytes.
 /// Docker uses IEC (MiB/GiB, 1024) for memory and SI (kB/MB/GB, 1000) for I/O.
-#[allow(dead_code)] // used by the CLI/bollard backends added in later tasks
+#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn parse_bytes(s: &str) -> Option<f64> {
     let s = s.trim();
     if s.is_empty() || s == "--" || s == "N/A" {
@@ -63,7 +65,7 @@ fn parse_bytes(s: &str) -> Option<f64> {
 }
 
 /// Parse a docker "A / B" pair (MemUsage, NetIO, BlockIO) into (A, B) bytes.
-#[allow(dead_code)] // used by the CLI/bollard backends added in later tasks
+#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn parse_pair(s: &str) -> (Option<f64>, Option<f64>) {
     let mut it = s.split('/');
     let a = it.next().and_then(parse_bytes);
@@ -72,9 +74,90 @@ fn parse_pair(s: &str) -> (Option<f64>, Option<f64>) {
 }
 
 /// Parse a "12.5%" percentage into f64.
-#[allow(dead_code)] // used by the CLI/bollard backends added in later tasks
+#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
 fn parse_percent(s: &str) -> Option<f64> {
     s.trim().trim_end_matches('%').trim().parse().ok()
+}
+
+#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
+fn short_id(id: &str) -> String {
+    id.chars().take(12).collect()
+}
+
+#[allow(dead_code)] // consumed by merge_cli's callers, wired up in Task 3
+fn health_from(s: &str) -> String {
+    match s {
+        "healthy" | "unhealthy" | "starting" => s.to_string(),
+        _ => "none".to_string(),
+    }
+}
+
+/// Join `docker ps`/`stats` (newline-delimited JSON) and `docker inspect` (JSON
+/// array) by 12-char container id into normalized Containers.
+#[allow(dead_code)] // consumed by collect_via_cli(), wired up in Task 3
+pub(crate) fn merge_cli(ps: &str, stats: &str, inspect: &str) -> Vec<Container> {
+    // stats keyed by short id
+    let mut stats_map: HashMap<String, Value> = HashMap::new();
+    for line in stats.lines().filter(|l| !l.trim().is_empty()) {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Some(id) = v.get("ID").and_then(|x| x.as_str()) {
+                stats_map.insert(short_id(id), v);
+            }
+        }
+    }
+    // inspect (array) keyed by short id -> (restart_count)
+    let mut restart_map: HashMap<String, u64> = HashMap::new();
+    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(inspect) {
+        for v in arr {
+            if let Some(id) = v.get("Id").and_then(|x| x.as_str()) {
+                if let Some(rc) = v.get("RestartCount").and_then(|x| x.as_u64()) {
+                    restart_map.insert(short_id(id), rc);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for line in ps.lines().filter(|l| !l.trim().is_empty()) {
+        let p: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let id = short_id(p.get("ID").and_then(|x| x.as_str()).unwrap_or(""));
+        let get = |k: &str| p.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+
+        let mut c = Container {
+            id: id.clone(),
+            name: get("Names"),
+            image: get("Image"),
+            state: get("State"),
+            status: get("Status"),
+            health: health_from(&get("HealthStatus")),
+            ports: get("Ports"),
+            created_at: get("CreatedAt"),
+            uptime: get("RunningFor"),
+            restart_count: restart_map.get(&id).copied(),
+            ..Default::default()
+        };
+
+        if let Some(s) = stats_map.get(&id) {
+            let sg = |k: &str| s.get(k).and_then(|x| x.as_str()).unwrap_or("");
+            c.cpu_percent = parse_percent(sg("CPUPerc"));
+            let (mu, ml) = parse_pair(sg("MemUsage"));
+            c.mem_used = mu;
+            c.mem_limit = ml;
+            c.mem_percent = parse_percent(sg("MemPerc"));
+            let (rx, tx) = parse_pair(sg("NetIO"));
+            c.net_rx = rx;
+            c.net_tx = tx;
+            let (br, bw) = parse_pair(sg("BlockIO"));
+            c.block_read = br;
+            c.block_write = bw;
+            c.pids = sg("PIDs").trim().parse().ok();
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -99,5 +182,29 @@ mod tests {
         assert_eq!(parse_percent("0.10%"), Some(0.10));
         assert_eq!(parse_percent("12%"), Some(12.0));
         assert_eq!(parse_percent("--"), None);
+    }
+
+    const PS: &str = r#"{"ID":"a67c38371df9","Names":"coolify-sentinel","Image":"ghcr.io/coollabsio/sentinel:0.0.21","State":"running","Status":"Up 20 hours (healthy)","HealthStatus":"healthy","RunningFor":"20 hours ago","CreatedAt":"2026-07-08 03:38:33 -0400 EDT","Ports":""}
+{"ID":"b12cafe00042","Names":"flappy-db","Image":"postgres:16","State":"exited","Status":"Exited (1) 3 minutes ago","HealthStatus":"","RunningFor":"5 minutes ago","CreatedAt":"2026-07-08 01:00:00 -0400 EDT","Ports":""}"#;
+    const STATS: &str = r#"{"ID":"a67c38371df9","Name":"coolify-sentinel","CPUPerc":"0.50%","MemUsage":"23.43MiB / 23.41GiB","MemPerc":"0.10%","NetIO":"1.11MB / 51.8MB","BlockIO":"32MB / 401kB","PIDs":"11"}"#;
+    const INSPECT: &str = r#"[{"Id":"a67c38371df9abc","RestartCount":2,"Config":{"Image":"ghcr.io/coollabsio/sentinel:0.0.21"},"State":{"Health":{"Status":"healthy"}}},{"Id":"b12cafe00042abc","RestartCount":7,"Config":{"Image":"postgres:16"},"State":{}}]"#;
+
+    #[test]
+    fn merge_cli_joins_sources_by_id() {
+        let c = merge_cli(PS, STATS, INSPECT);
+        assert_eq!(c.len(), 2);
+        let sentinel = c.iter().find(|x| x.name == "coolify-sentinel").unwrap();
+        assert_eq!(sentinel.state, "running");
+        assert_eq!(sentinel.health, "healthy");
+        assert_eq!(sentinel.cpu_percent, Some(0.50));
+        assert_eq!(sentinel.mem_used, Some(23.43 * 1024.0 * 1024.0));
+        assert_eq!(sentinel.pids, Some(11));
+        assert_eq!(sentinel.restart_count, Some(2));
+        // Exited container: present, with stats null (no stats line), restart from inspect.
+        let db = c.iter().find(|x| x.name == "flappy-db").unwrap();
+        assert_eq!(db.state, "exited");
+        assert_eq!(db.cpu_percent, None);
+        assert_eq!(db.restart_count, Some(7));
+        assert_eq!(db.health, "none");
     }
 }
