@@ -179,6 +179,21 @@ async fn docker(args: &[&str]) -> Option<String> {
     }
 }
 
+/// Run a docker CLI subcommand over a *batch* of names/ids, returning whatever
+/// stdout was produced even if the overall exit status is non-zero.
+///
+/// `docker inspect`/`docker image inspect` process each argument independently:
+/// a stale reference (e.g. a running container whose image tag was later
+/// removed or retagged — a real, fairly common situation) prints one JSON
+/// line per *successful* argument to stdout and an error line per failing one
+/// to stderr, then exits non-zero overall. Using the strict `docker()` helper
+/// here would discard every already-successful line just because one of many
+/// batched names failed. None only when the process itself couldn't run.
+async fn docker_batch_lenient(args: &[&str]) -> Option<String> {
+    let out = tokio::process::Command::new("docker").args(args).output().await.ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 /// Collect containers via the docker CLI. None if docker is unavailable.
 async fn collect_via_cli() -> Option<Vec<Container>> {
     let ps = docker(&["ps", "--format", "{{json .}}"]).await?;
@@ -196,8 +211,9 @@ async fn collect_via_cli() -> Option<Vec<Container>> {
         let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
         args.extend(id_refs.iter());
         // `docker inspect --format {{json .}}` prints one JSON object per line, not an array;
-        // wrap into an array for merge_cli.
-        let raw = docker(&args).await.unwrap_or_default();
+        // wrap into an array for merge_cli. Lenient: a container that exited
+        // between `ps` and here shouldn't blank out everyone else's data.
+        let raw = docker_batch_lenient(&args).await.unwrap_or_default();
         let joined: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
         format!("[{}]", joined.join(","))
     };
@@ -213,7 +229,10 @@ async fn collect_via_cli() -> Option<Vec<Container>> {
         let mut args = vec!["image", "inspect", "--format", "{{json .}}"];
         let refs: Vec<&str> = images.iter().map(|s| s.as_str()).collect();
         args.extend(refs.iter());
-        if let Some(raw) = docker(&args).await {
+        // Lenient: a dangling image ref (container running an image whose
+        // local tag was since removed/retagged) must not blank out digests
+        // for every other, perfectly-resolvable image in the same batch.
+        if let Some(raw) = docker_batch_lenient(&args).await {
             let mut digest_by_ref: HashMap<String, String> = HashMap::new();
             for line in raw.lines().filter(|l| !l.trim().is_empty()) {
                 if let Ok(v) = serde_json::from_str::<Value>(line) {
@@ -577,5 +596,23 @@ mod tests {
         assert_eq!(db.cpu_percent, None);
         assert_eq!(db.restart_count, Some(7));
         assert_eq!(db.health, "none");
+    }
+
+    #[tokio::test]
+    #[ignore = "live: full refresh incl. registry checks against real containers"]
+    async fn live_full_refresh() {
+        refresh().await;
+        let v = get_container_stats();
+        eprintln!("status={} count={}", v["status"], v["containers"].as_array().unwrap().len());
+        let arr = v["containers"].as_array().unwrap();
+        assert_eq!(v["status"], "ok");
+        assert!(!arr.is_empty());
+        // Structural honesty: metrics are numbers or null, never fabricated strings.
+        for c in arr {
+            assert!(c["cpuPercent"].is_number() || c["cpuPercent"].is_null());
+            assert!(c["imageUpdateAvailable"].is_boolean() || c["imageUpdateAvailable"].is_null());
+        }
+        let updates = arr.iter().filter(|c| c["imageUpdateAvailable"] == serde_json::Value::Bool(true)).count();
+        eprintln!("containers with image updates available: {updates}");
     }
 }
