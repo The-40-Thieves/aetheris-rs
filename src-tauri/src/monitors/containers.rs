@@ -5,8 +5,9 @@
 //! later tasks on this branch. Until then `Container` and the parsers below
 //! are unused from the crate's perspective, hence the `dead_code` allows.
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 #[derive(Serialize, Default, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -160,6 +161,83 @@ pub(crate) fn merge_cli(ps: &str, stats: &str, inspect: &str) -> Vec<Container> 
     out
 }
 
+struct Cache {
+    status: &'static str,
+    reason: String,
+    containers: Vec<Container>,
+}
+static CACHE: RwLock<Option<Cache>> = RwLock::new(None);
+
+/// Synchronous cache read for get_stats. Never blocks on Docker.
+#[allow(dead_code)] // called by get_stats once main.rs wires it up in Task 8
+pub fn get_container_stats() -> Value {
+    let guard = CACHE.read().unwrap();
+    match guard.as_ref() {
+        Some(c) => json!({
+            "status": c.status,
+            "reason": c.reason,
+            "containers": c.containers,
+        }),
+        None => json!({ "status": "unavailable", "reason": "not collected yet", "containers": [] }),
+    }
+}
+
+/// Run a docker CLI subcommand, returning stdout on success.
+#[allow(dead_code)] // consumed by collect_via_cli(), wired up in Task 3
+async fn docker(args: &[&str]) -> Option<String> {
+    let out = tokio::process::Command::new("docker").args(args).output().await.ok()?;
+    if out.status.success() {
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        None
+    }
+}
+
+/// Collect containers via the docker CLI. None if docker is unavailable.
+#[allow(dead_code)] // consumed by refresh(), wired up to main.rs in Task 8
+async fn collect_via_cli() -> Option<Vec<Container>> {
+    let ps = docker(&["ps", "--format", "{{json .}}"]).await?;
+    // Stats/inspect are best-effort enrichment; ps alone still yields containers.
+    let stats = docker(&["stats", "--no-stream", "--format", "{{json .}}"]).await.unwrap_or_default();
+    let ids: Vec<String> = ps
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter_map(|v| v.get("ID").and_then(|x| x.as_str()).map(|s| s.to_string()))
+        .collect();
+    let inspect = if ids.is_empty() {
+        "[]".to_string()
+    } else {
+        let mut args = vec!["inspect", "--format", "{{json .}}"];
+        let id_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        args.extend(id_refs.iter());
+        // `docker inspect --format {{json .}}` prints one JSON object per line, not an array;
+        // wrap into an array for merge_cli.
+        let raw = docker(&args).await.unwrap_or_default();
+        let joined: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+        format!("[{}]", joined.join(","))
+    };
+    Some(merge_cli(&ps, &stats, &inspect))
+}
+
+/// Refresh the cache. Tries CLI, then (Task 4) bollard, then records unavailable.
+#[allow(dead_code)] // called on a timer once main.rs wires it up in Task 8
+pub async fn refresh() {
+    if let Some(containers) = collect_via_cli().await {
+        *CACHE.write().unwrap() = Some(Cache {
+            status: "ok",
+            reason: String::new(),
+            containers,
+        });
+        return;
+    }
+    // Backends exhausted (bollard added in Task 4 before this fallthrough).
+    *CACHE.write().unwrap() = Some(Cache {
+        status: "unavailable",
+        reason: "docker CLI and socket both unavailable".to_string(),
+        containers: Vec::new(),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +266,26 @@ mod tests {
 {"ID":"b12cafe00042","Names":"flappy-db","Image":"postgres:16","State":"exited","Status":"Exited (1) 3 minutes ago","HealthStatus":"","RunningFor":"5 minutes ago","CreatedAt":"2026-07-08 01:00:00 -0400 EDT","Ports":""}"#;
     const STATS: &str = r#"{"ID":"a67c38371df9","Name":"coolify-sentinel","CPUPerc":"0.50%","MemUsage":"23.43MiB / 23.41GiB","MemPerc":"0.10%","NetIO":"1.11MB / 51.8MB","BlockIO":"32MB / 401kB","PIDs":"11"}"#;
     const INSPECT: &str = r#"[{"Id":"a67c38371df9abc","RestartCount":2,"Config":{"Image":"ghcr.io/coollabsio/sentinel:0.0.21"},"State":{"Health":{"Status":"healthy"}}},{"Id":"b12cafe00042abc","RestartCount":7,"Config":{"Image":"postgres:16"},"State":{}}]"#;
+
+    #[test]
+    fn get_container_stats_unavailable_before_refresh() {
+        // With nothing cached, status is "unavailable" and containers is [].
+        let v = get_container_stats();
+        assert_eq!(v["status"], "unavailable");
+        assert!(v["containers"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "live: requires docker with running containers on this host"]
+    async fn live_cli_probe() {
+        let c = collect_via_cli().await.expect("docker CLI should work on this host");
+        eprintln!("collected {} containers via CLI", c.len());
+        for x in c.iter().take(5) {
+            eprintln!("{} | {} | {} | cpu={:?} mem={:?} restarts={:?}",
+                x.name, x.state, x.health, x.cpu_percent, x.mem_used, x.restart_count);
+        }
+        assert!(!c.is_empty());
+    }
 
     #[test]
     fn merge_cli_joins_sources_by_id() {
