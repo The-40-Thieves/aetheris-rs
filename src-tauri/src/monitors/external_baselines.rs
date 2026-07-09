@@ -100,7 +100,17 @@ pub async fn refresh(client: &reqwest::Client) {
         Some(v) => v,
         None => ai_unavailable("fetch failed"),
     };
-    let dora_local = compute_git_dora().unwrap_or_else(dora_unavailable);
+    let mut dora_local = compute_git_dora().unwrap_or_else(dora_unavailable);
+    // Layer real CI-derived change-failure-rate + MTTR onto the git DORA when a
+    // GitHub repo + token are available. Best-effort: leaves the "n/a" values
+    // untouched on any failure — never fabricated.
+    if let Some((cfr, mttr, runs)) = fetch_ci_dora(client).await {
+        dora_local["change_failure_rate"] = json!(cfr);
+        dora_local["mttr"] = json!(mttr);
+        dora_local["ci_runs_90d"] = json!(runs);
+        let src = dora_local["source"].as_str().unwrap_or("git").to_string();
+        dora_local["source"] = json!(format!("{src} + GitHub Actions API"));
+    }
 
     let mut guard = CACHE.write().unwrap();
     *guard = Some(Cache { ai_evals, dora_local });
@@ -206,6 +216,142 @@ fn dora_from_commit_epochs(epochs: &[i64]) -> Value {
     })
 }
 
+// --- CI-integrated DORA (change-failure-rate + MTTR from GitHub Actions) -------
+
+/// One completed CI run: conclusion, creation epoch, and workflow name.
+struct CiRun {
+    conclusion: String,
+    created: i64,
+    workflow: String,
+}
+
+/// Format a duration in seconds compactly ("45m", "2.3h", "1.4d").
+fn format_duration(secs: i64) -> String {
+    let s = secs.max(0) as f64;
+    if s < 3600.0 {
+        format!("{:.0}m", s / 60.0)
+    } else if s < 86_400.0 {
+        format!("{:.1}h", s / 3600.0)
+    } else {
+        format!("{:.1}d", s / 86_400.0)
+    }
+}
+
+/// Compute change-failure-rate and MTTR from CI runs. CFR = failed / (success +
+/// failed). MTTR = median time from a failing run to the next successful run on
+/// the same workflow. Returns (cfr, mttr, completed_run_count).
+fn dora_from_runs(runs: &[CiRun]) -> (String, String, usize) {
+    let completed: Vec<&CiRun> = runs
+        .iter()
+        .filter(|r| r.conclusion == "success" || r.conclusion == "failure")
+        .collect();
+    let n = completed.len();
+    if n == 0 {
+        return ("n/a (no completed CI runs)".into(), "n/a".into(), 0);
+    }
+    let failures = completed.iter().filter(|r| r.conclusion == "failure").count();
+    let cfr = format!("{:.0}% ({failures}/{n} runs)", failures as f64 / n as f64 * 100.0);
+
+    // MTTR: per workflow, time from each failure to the next success.
+    let mut by_wf: std::collections::HashMap<&str, Vec<&CiRun>> = std::collections::HashMap::new();
+    for r in &completed {
+        by_wf.entry(r.workflow.as_str()).or_default().push(r);
+    }
+    let mut recoveries: Vec<i64> = Vec::new();
+    for (_wf, mut list) in by_wf {
+        list.sort_by_key(|r| r.created);
+        for (i, r) in list.iter().enumerate() {
+            if r.conclusion == "failure" {
+                if let Some(succ) = list[i + 1..].iter().find(|x| x.conclusion == "success") {
+                    recoveries.push(succ.created - r.created);
+                }
+            }
+        }
+    }
+    let mttr = if failures == 0 {
+        "0 (no failures)".into()
+    } else if recoveries.is_empty() {
+        "n/a (not yet recovered)".into()
+    } else {
+        recoveries.sort_unstable();
+        format_duration(recoveries[recoveries.len() / 2])
+    };
+    (cfr, mttr, n)
+}
+
+/// (owner, repo) parsed from `git remote get-url origin` (https or ssh form).
+fn github_repo() -> Option<(String, String)> {
+    let out = Command::new("git").args(["remote", "get-url", "origin"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let path = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("git@github.com:"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))?;
+    let path = path.trim_end_matches(".git");
+    let (owner, repo) = path.split_once('/')?;
+    Some((owner.to_string(), repo.to_string()))
+}
+
+/// A GitHub token from `GITHUB_TOKEN`, else the `gh` CLI (dev convenience).
+fn github_token() -> Option<String> {
+    if let Ok(t) = std::env::var("GITHUB_TOKEN") {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    let out = Command::new("gh").args(["auth", "token"]).output().ok()?;
+    if out.status.success() {
+        let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    None
+}
+
+/// Fetch recent default-branch CI runs from the GitHub Actions API and derive
+/// (change_failure_rate, mttr, run_count). None when no repo/token/network.
+async fn fetch_ci_dora(client: &reqwest::Client) -> Option<(String, String, usize)> {
+    let (owner, repo) = github_repo()?;
+    let token = github_token()?;
+    let url = format!(
+        "https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=100&branch=master&status=completed"
+    );
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "aetheris-telemetry")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: Value = resp.json().await.ok()?;
+    let runs: Vec<CiRun> = body["workflow_runs"]
+        .as_array()?
+        .iter()
+        .filter_map(|r| {
+            Some(CiRun {
+                conclusion: r["conclusion"].as_str()?.to_string(),
+                created: chrono::DateTime::parse_from_rfc3339(r["created_at"].as_str()?)
+                    .ok()?
+                    .timestamp(),
+                workflow: r["name"].as_str().unwrap_or("").to_string(),
+            })
+        })
+        .collect();
+    if runs.is_empty() {
+        return None;
+    }
+    Some(dora_from_runs(&runs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +397,26 @@ mod tests {
         let d = dora_from_commit_epochs(&[]);
         assert_eq!(d["commits_30d"], 0);
         assert!(d["lead_time"].as_str().unwrap().contains("n/a"));
+    }
+
+    #[test]
+    fn dora_from_ci_runs_computes_cfr_and_mttr() {
+        let runs = vec![
+            CiRun { conclusion: "success".into(), created: 0, workflow: "CI".into() },
+            CiRun { conclusion: "failure".into(), created: 100, workflow: "CI".into() },
+            CiRun { conclusion: "success".into(), created: 700, workflow: "CI".into() }, // recovers 600s later
+        ];
+        let (cfr, mttr, n) = dora_from_runs(&runs);
+        assert_eq!(n, 3);
+        assert!(cfr.starts_with("33%"), "cfr={cfr}");
+        assert_eq!(mttr, "10m"); // 600s median recovery
+        // No failures -> 0% / "0 (no failures)".
+        let ok = vec![CiRun { conclusion: "success".into(), created: 0, workflow: "CI".into() }];
+        let (cfr2, mttr2, _) = dora_from_runs(&ok);
+        assert!(cfr2.starts_with("0%"));
+        assert_eq!(mttr2, "0 (no failures)");
+        // No runs -> honest n/a, never fabricated.
+        assert_eq!(dora_from_runs(&[]).2, 0);
     }
 
     #[tokio::test]

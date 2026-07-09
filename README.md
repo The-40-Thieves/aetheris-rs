@@ -76,8 +76,11 @@ per-process egress attribution, and local LLM inference observability.
 - **LLM leaderboard ranks** fetched live from the Arena community mirror and
   cached; on fetch failure the panel shows *"unavailable"*, never stale/fake ranks.
 - **DORA metrics** computed from real `git log` (deploy frequency + lead-time
-  proxy). Change-failure-rate and MTTR are shown as *n/a* because they require CI
-  / incident data not wired in.
+  proxy) plus **real change-failure-rate and MTTR from the GitHub Actions API**
+  when the working directory is a GitHub repo and a token is available
+  (`GITHUB_TOKEN` or the `gh` CLI): CFR = failed / completed default-branch runs,
+  MTTR = median time from a failing run to the next passing run. Falls back to
+  *n/a* (never fabricated) when there's no repo, token, or CI runs.
 - **Chip Tjmax limits and SaaS pricing** are genuinely static reference data and
   are labelled as such (`as_of` + `source`).
 
@@ -112,7 +115,6 @@ per-process egress attribution, and local LLM inference observability.
 ## Roadmap (planned, not yet implemented)
 
 - **macOS / Windows egress** via PKTAP and `GetExtendedTcpTable` respectively.
-- **CI-integrated DORA** (real change-failure-rate / MTTR from a CI provider API).
 - **Live SaaS pricing** (currently curated static reference).
 
 ## Requirements
