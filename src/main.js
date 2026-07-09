@@ -62,7 +62,7 @@ function updateDOM() {
                 procHtml += `
                     <tr>
                         <td>${p.pid}</td>
-                        <td>${p.name}</td>
+                        <td>${esc(p.name)}</td>
                         <td style="color: ${p.cpu > 50 ? 'var(--danger)' : 'inherit'}">${p.cpu.toFixed(1)}%</td>
                         <td>${p.mem.toFixed(1)}%</td>
                         <td><span style="font-size:0.75rem">R: ${formatBytes(p.disk_r)}/s <br> W: ${formatBytes(p.disk_w)}/s</span></td>
@@ -79,7 +79,7 @@ function updateDOM() {
                 let color = s.temp > (s.critical || 90) ? 'var(--danger)' : s.temp > (s.max || 80) ? 'var(--warning)' : 'inherit';
                 sensorHtml += `
                     <tr>
-                        <td>${s.label}</td>
+                        <td>${esc(s.label)}</td>
                         <td style="color: ${color}">${s.temp.toFixed(1)}°C</td>
                         <td><span class="label" style="font-size: 0.75rem">Max: ${s.max || '--'}</span></td>
                     </tr>
@@ -98,7 +98,7 @@ function updateDOM() {
                 let vramText = gpu.vramTotal > 0 ? `${formatBytes(gpu.vramUsed * 1024 * 1024)} / ${formatBytes(gpu.vramTotal * 1024 * 1024)}` : 'Unified Memory';
                 gpuHtml += `
                     <div class="metric">
-                        <span class="label">${gpu.vendor} - ${gpu.model}</span>
+                        <span class="label">${esc(gpu.vendor)} - ${esc(gpu.model)}</span>
                         <span class="value">${gpu.load.toFixed(1)}% | ${gpu.temp.toFixed(1)}°C</span>
                         <span class="label">VRAM: ${vramText}</span>
                     </div>
@@ -228,9 +228,9 @@ function updateDOM() {
             stats.dynamic.extras.externalBaselines.observability_pricing.forEach(p => {
                 let color = p.est_monthly_cost === "$0" ? 'var(--success)' : 'var(--text-main)';
                 prHtml += `<tr>
-                    <td style="color: ${color}; font-weight: ${p.est_monthly_cost === "$0" ? 'bold' : 'normal'}">${p.tool}</td>
-                    <td style="color: ${color}">${p.tier}</td>
-                    <td style="color: ${color}">${p.est_monthly_cost}</td>
+                    <td style="color: ${color}; font-weight: ${p.est_monthly_cost === "$0" ? 'bold' : 'normal'}">${esc(p.tool)}</td>
+                    <td style="color: ${color}">${esc(p.tier)}</td>
+                    <td style="color: ${color}">${esc(p.est_monthly_cost)}</td>
                 </tr>`;
             });
             document.getElementById('pricing-body').innerHTML = prHtml;
@@ -239,9 +239,9 @@ function updateDOM() {
             let aiHtml = '';
             stats.dynamic.extras.externalBaselines.ai_evals.lmsys_chat_arena.forEach(ai => {
                 aiHtml += `<tr>
-                    <td>#${ai.rank}</td>
-                    <td>${ai.model}</td>
-                    <td>${ai.score} ELO</td>
+                    <td>#${esc(ai.rank)}</td>
+                    <td>${esc(ai.model)}</td>
+                    <td>${esc(ai.score)} ELO</td>
                 </tr>`;
             });
             document.getElementById('ai-evals-body').innerHTML = aiHtml;
