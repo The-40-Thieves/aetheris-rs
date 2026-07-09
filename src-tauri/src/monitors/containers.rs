@@ -216,7 +216,44 @@ async fn collect_via_cli() -> Option<Vec<Container>> {
         let joined: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
         format!("[{}]", joined.join(","))
     };
-    Some(merge_cli(&ps, &stats, &inspect))
+    let mut containers = merge_cli(&ps, &stats, &inspect);
+    // Local repo digests, keyed by image ref, via one batched image inspect.
+    let images: Vec<String> = {
+        let mut v: Vec<String> = containers.iter().map(|c| c.image.clone()).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    if !images.is_empty() {
+        let mut args = vec!["image", "inspect", "--format", "{{json .}}"];
+        let refs: Vec<&str> = images.iter().map(|s| s.as_str()).collect();
+        args.extend(refs.iter());
+        if let Some(raw) = docker(&args).await {
+            let mut digest_by_ref: HashMap<String, String> = HashMap::new();
+            for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+                if let Ok(v) = serde_json::from_str::<Value>(line) {
+                    let rds = v.get("RepoDigests").and_then(|x| x.as_array());
+                    let tags = v.get("RepoTags").and_then(|x| x.as_array());
+                    if let (Some(rds), Some(tags)) = (rds, tags) {
+                        // Map each RepoTag to the (first) RepoDigest's digest part.
+                        if let Some(dig) = rds
+                            .iter()
+                            .filter_map(|d| d.as_str())
+                            .find_map(|d| d.split_once('@').map(|(_, h)| h.to_string()))
+                        {
+                            for t in tags.iter().filter_map(|t| t.as_str()) {
+                                digest_by_ref.insert(t.to_string(), dig.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            for c in &mut containers {
+                c.local_digest = digest_by_ref.get(&c.image).cloned();
+            }
+        }
+    }
+    Some(containers)
 }
 
 /// Docker's CPU% formula: (cpu_delta / system_delta) * online_cpus * 100.
@@ -414,34 +451,58 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
                 c.block_write = Some(write_sum as f64);
             }
         }
+
+        if let Ok(img) = docker.inspect_image(&c.image).await {
+            c.local_digest = img
+                .repo_digests
+                .as_ref()
+                .and_then(|v| v.first())
+                .and_then(|d| d.split_once('@').map(|(_, h)| h.to_string()));
+        }
+
         out.push(c);
     }
     Some(out)
 }
 
 /// Refresh the cache. Tries the CLI, then bollard, then records unavailable.
+/// Once containers are collected, checks each image against its registry
+/// concurrently to populate `image_update_available`.
 #[allow(dead_code)] // called on a timer once main.rs wires it up in Task 8
 pub async fn refresh() {
     let collected = match collect_via_cli().await {
         Some(c) => Some(c),
         None => collect_via_bollard().await,
     };
-    match collected {
-        Some(containers) => {
-            *CACHE.write().unwrap() = Some(Cache {
-                status: "ok",
-                reason: String::new(),
-                containers,
-            });
-        }
+    let mut containers = match collected {
+        Some(c) => c,
         None => {
             *CACHE.write().unwrap() = Some(Cache {
                 status: "unavailable",
                 reason: "docker CLI and socket both unavailable".to_string(),
                 containers: Vec::new(),
             });
+            return;
         }
+    };
+
+    let client = reqwest::Client::new();
+    let checks = futures_util::future::join_all(containers.iter().map(|c| {
+        let image = c.image.clone();
+        let digest = c.local_digest.clone();
+        let client = &client;
+        async move { crate::monitors::registry::check_update(client, &image, digest.as_deref()).await }
+    }))
+    .await;
+    for (c, upd) in containers.iter_mut().zip(checks) {
+        c.image_update_available = upd;
     }
+
+    *CACHE.write().unwrap() = Some(Cache {
+        status: "ok",
+        reason: String::new(),
+        containers,
+    });
 }
 
 #[cfg(test)]
