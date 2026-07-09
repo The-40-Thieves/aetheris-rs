@@ -348,6 +348,16 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(12 * 3600)).await;
                 }
             });
+            // Refresh live external baselines (LLM leaderboard ranks + git DORA)
+            // every few hours; until the first fetch lands the UI shows an
+            // explicit "unavailable" state rather than fabricated ranks.
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                loop {
+                    monitors::external_baselines::refresh(&client).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(3 * 3600)).await;
+                }
+            });
             Ok(())
         })
         .manage(AppState {

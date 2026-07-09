@@ -240,15 +240,22 @@ function updateDOM() {
             });
             document.getElementById('pricing-body').innerHTML = prHtml;
 
-            // AI Evals
+            // AI Evals (live Arena mirror, or explicit unavailable state)
             let aiHtml = '';
-            stats.dynamic.extras.externalBaselines.ai_evals.lmsys_chat_arena.forEach(ai => {
-                aiHtml += `<tr>
-                    <td>#${esc(ai.rank)}</td>
-                    <td>${esc(ai.model)}</td>
-                    <td>${esc(ai.score)} ELO</td>
-                </tr>`;
-            });
+            const aiEvals = stats.dynamic.extras.externalBaselines.ai_evals || {};
+            const arena = aiEvals.lmsys_chat_arena || [];
+            if (aiEvals.status === 'ok' && arena.length > 0) {
+                arena.forEach(ai => {
+                    const rank = ai.rank != null ? `#${esc(ai.rank)}` : '—';
+                    const score = ai.score != null ? `${esc(ai.score)} ELO` : '—';
+                    aiHtml += `<tr><td>${rank}</td><td>${esc(ai.model)}</td><td>${score}</td></tr>`;
+                });
+                if (aiEvals.last_updated) {
+                    aiHtml += `<tr><td colspan="3" class="label" style="font-size:0.7rem">Arena mirror · as of ${esc(aiEvals.last_updated)}</td></tr>`;
+                }
+            } else {
+                aiHtml = `<tr><td colspan="3" class="empty-state">Live ranks unavailable${aiEvals.reason ? ' (' + esc(aiEvals.reason) + ')' : ''}</td></tr>`;
+            }
             document.getElementById('ai-evals-body').innerHTML = aiHtml;
         }
 
