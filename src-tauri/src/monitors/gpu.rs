@@ -131,8 +131,12 @@ fn parse_rocm_json(v: &Value) -> Vec<Value> {
     };
     let mut gpus = Vec::new();
     for (key, card) in obj {
-        // Only the cardN entries; skip a possible top-level "system" object.
-        if !(key.starts_with("card") && key[4..].chars().all(|c| c.is_ascii_digit())) {
+        // Only the cardN entries (N a non-empty run of digits); skip a possible
+        // top-level "system" object (and a bare "card" with no index).
+        let is_cardn = key
+            .strip_prefix("card")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()));
+        if !is_cardn {
             continue;
         }
         let s = |k: &str| -> Option<f64> {
@@ -293,6 +297,7 @@ mod tests {
     fn rocm_json_parses_real_strings() {
         let v = json!({
             "system": { "Driver version": "6.8.5" },
+            "card": { "Card Series": "should be ignored (no index)" },
             "card0": {
                 "Temperature (Sensor edge) (C)": "44.0",
                 "GPU use (%)": "37",
