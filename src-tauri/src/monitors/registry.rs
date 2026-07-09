@@ -17,13 +17,26 @@ pub struct ImageRef {
 /// Docker Hub defaulting (implicit docker.io + library/ for single-segment names).
 #[allow(dead_code)] // consumed by the manifest client added in Task 6
 pub fn parse_image_ref(image: &str) -> Option<ImageRef> {
-    if image.is_empty() || image.contains('@') && !image.contains(':') {
-        // digest-only refs without a tag aren't checkable here
+    if image.is_empty() {
+        return None;
     }
-    let (name, tag) = match image.rsplit_once(':') {
+
+    // A ref may carry a digest suffix (`@sha256:...`), with or without an
+    // explicit tag: `name@sha256:...` (digest-only) or `name:tag@sha256:...`
+    // (both). Strip the digest before tag parsing so its `:` is never
+    // mistaken for the tag separator.
+    let has_digest = image.contains('@');
+    let name_and_maybe_tag = image.split_once('@').map_or(image, |(before, _)| before);
+
+    let (name, tag) = match name_and_maybe_tag.rsplit_once(':') {
         // A ':' after the last '/' is the tag; a ':' before a '/' is a port.
         Some((n, t)) if !t.contains('/') => (n, t.to_string()),
-        _ => (image, "latest".to_string()),
+        _ if has_digest => {
+            // Digest-pinned with no explicit tag — nothing to compare a
+            // running image's tag against, so this ref isn't checkable here.
+            return None;
+        }
+        _ => (name_and_maybe_tag, "latest".to_string()),
     };
     let first = name.split('/').next().unwrap_or("");
     let is_registry = first.contains('.') || first.contains(':') || first == "localhost";
@@ -75,6 +88,13 @@ mod tests {
         // registry with port is not mistaken for a tag
         assert_eq!(parse_image_ref("localhost:5000/app:v1").unwrap(),
             ImageRef { registry: "localhost:5000".into(), repository: "app".into(), tag: "v1".into() });
+        // digest-only refs (no tag to compare against) aren't checkable
+        assert_eq!(parse_image_ref("postgres@sha256:abcd1234ef"), None);
+        // empty input is not checkable
+        assert_eq!(parse_image_ref(""), None);
+        // a tag alongside a digest is parsed; the digest is ignored
+        assert_eq!(parse_image_ref("ghcr.io/coollabsio/sentinel:0.0.21@sha256:abc123").unwrap(),
+            ImageRef { registry: "ghcr.io".into(), repository: "coollabsio/sentinel".into(), tag: "0.0.21".into() });
     }
 
     #[test]
