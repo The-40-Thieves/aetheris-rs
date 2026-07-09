@@ -10,6 +10,7 @@
 //!   * LM Studio (OpenAI-compatible SSE) reports token *counts* in a final
 //!     `usage` object but no durations, so tokens/sec is derived from measured
 //!     wall-clock time.
+//!
 //! Observed metrics are logged to the `telemetry` table.
 //!
 //! The previous implementation intercepted and DISCARDED the request, returning

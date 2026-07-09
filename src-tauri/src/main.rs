@@ -221,7 +221,7 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
         })
     }).collect();
     
-    proc_list.sort_by(|a, b| b.memory().cmp(&a.memory()));
+    proc_list.sort_by_key(|p| std::cmp::Reverse(p.memory()));
     let list_mem: Vec<_> = proc_list.iter().take(8).map(|p| {
         json!({
             "pid": p.pid().as_u32(),

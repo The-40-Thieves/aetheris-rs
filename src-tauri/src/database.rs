@@ -75,7 +75,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()?;
-        let should_insert = age_secs.map_or(true, |age| age >= min_interval_secs);
+        let should_insert = age_secs.is_none_or(|age| age >= min_interval_secs);
         if should_insert {
             conn.execute(
                 "INSERT INTO telemetry (metric_type, value, context) VALUES (?1, ?2, ?3)",

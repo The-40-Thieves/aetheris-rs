@@ -266,10 +266,10 @@ struct GcpRanges {
 }
 #[derive(Deserialize)]
 struct GcpPrefix {
-    #[serde(default)]
-    ipv4Prefix: String,
-    #[serde(default)]
-    ipv6Prefix: String,
+    #[serde(rename = "ipv4Prefix", default)]
+    ipv4_prefix: String,
+    #[serde(rename = "ipv6Prefix", default)]
+    ipv6_prefix: String,
     #[serde(default)]
     scope: String,
 }
@@ -308,10 +308,10 @@ pub async fn refresh_from_network(client: &reqwest::Client) {
     {
         if let Ok(gcp) = resp.json::<GcpRanges>().await {
             for p in gcp.prefixes {
-                let cidr = if !p.ipv4Prefix.is_empty() {
-                    &p.ipv4Prefix
+                let cidr = if !p.ipv4_prefix.is_empty() {
+                    &p.ipv4_prefix
                 } else {
-                    &p.ipv6Prefix
+                    &p.ipv6_prefix
                 };
                 if let Ok(net) = cidr.parse::<IpNet>() {
                     let detail = if p.scope.is_empty() {
