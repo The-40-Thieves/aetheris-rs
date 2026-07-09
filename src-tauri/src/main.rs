@@ -328,6 +328,16 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 server::start_server(db_clone).await;
             });
+            // Upgrade the egress CIDR classifier from its coarse hardcoded
+            // fallback to the live AWS/GCP published prefix lists, then refresh
+            // periodically. The classifier is usable immediately regardless.
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                loop {
+                    monitors::cloud_ranges::refresh_from_network(&client).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(12 * 3600)).await;
+                }
+            });
             Ok(())
         })
         .manage(AppState {

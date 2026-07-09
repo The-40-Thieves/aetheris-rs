@@ -1,5 +1,17 @@
 const { invoke } = window.__TAURI__.core;
 
+// Escape untrusted strings (process names, device models, etc.) before they are
+// interpolated into innerHTML, to prevent HTML/script injection from crafted
+// process names or device identifiers.
+function esc(s) {
+    return String(s ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
 function formatBytes(bytes, decimals = 2) {
     if (!+bytes) return '0 Bytes';
     const k = 1024;
@@ -145,18 +157,34 @@ function updateDOM() {
         document.getElementById('battery-content').innerHTML = battHtml;
 
         // --- Egress Topology ---
+        // Values may legitimately be null: bytes_sent is null when tcp_info is
+        // unavailable, and estimated_cost_usd is null when bytes are unknown or
+        // the provider is unattributed. Render those honestly, never as $0.00.
         let egressHtml = '';
         if (stats.dynamic.extras.egressTopology && stats.dynamic.extras.egressTopology.length > 0) {
             stats.dynamic.extras.egressTopology.forEach(conn => {
+                const pidLabel = conn.pid != null ? ` (PID ${conn.pid})` : '';
+                const sentCell = conn.bytes_sent != null
+                    ? formatBytes(conn.bytes_sent)
+                    : `<span class="label" title="Per-PID byte accounting requires the eBPF probe (roadmap)">—</span>`;
+                let costCell;
+                if (conn.estimated_cost_usd == null) {
+                    costCell = `<span class="label">n/a</span>`;
+                } else if (conn.is_mesh || conn.estimated_cost_usd === 0) {
+                    costCell = `<span style="color: var(--success)">Free</span>`;
+                } else {
+                    costCell = `<span style="color: var(--warning)">$${conn.estimated_cost_usd.toFixed(2)}</span>`;
+                }
+                const conf = conn.attribution_confidence === 'fallback'
+                    ? ` <span class="label" style="font-size:0.7rem" title="Coarse hardcoded ranges; live provider lists still loading">~</span>`
+                    : '';
                 egressHtml += `
                     <tr>
-                        <td style="${conn.shadow_alert ? 'color: var(--danger)' : ''}">${conn.process} (PID ${conn.pid})</td>
-                        <td>${conn.destination_name} <br><span class="label" style="font-size: 0.75rem">${conn.destination_ip}</span></td>
-                        <td>${formatBytes(conn.bytes_sent)}</td>
-                        <td>${conn.provider}</td>
-                        <td style="color: ${conn.estimated_cost_usd > 0 ? 'var(--warning)' : 'var(--success)'}">
-                            $${conn.estimated_cost_usd.toFixed(2)}
-                        </td>
+                        <td style="${conn.shadow_alert ? 'color: var(--danger)' : ''}">${esc(conn.process)}${pidLabel}</td>
+                        <td>${esc(conn.destination_name)}${conf} <br><span class="label" style="font-size: 0.75rem">${esc(conn.destination_ip)}</span></td>
+                        <td>${sentCell}</td>
+                        <td>${esc(conn.provider)}</td>
+                        <td>${costCell}</td>
                     </tr>
                 `;
             });
