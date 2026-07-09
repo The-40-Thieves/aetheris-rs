@@ -59,11 +59,18 @@ per-process egress attribution, and local LLM inference observability.
   `pid -> bytes` map — giving cumulative egress totals *including* short-lived /
   already-closed sockets and daemons with no currently-tracked connection, which
   the `ss` view cannot see. Surfaced as `extras.egressByProcess` with the mode in
-  `extras.egressAccounting` (`"ebpf"` vs `"sockets"`). It counts application-layer
-  payload bytes (the `sendmsg` size), not wire bytes (no IP/TCP headers or
-  retransmits). Without the feature or without privilege it is a silent no-op and
-  the socket-level view is used — never fabricated. Building the probe needs a
-  nightly toolchain with `rust-src` and `bpf-linker`; see `src-tauri/ebpf/`.
+  `extras.egressAccounting` (`"ebpf"` vs `"sockets"`). It counts the requested
+  `sendmsg` application-layer payload size — not wire bytes (no IP/TCP headers or
+  retransmits) — so it slightly over-counts partial/failed sends and, under heavy
+  concurrent multithreaded sends, may modestly under-count (a non-atomic map
+  update; a per-CPU map is future work). A `sched_process_exit` tracepoint evicts
+  each process's entry on exit, so recycled PIDs never inherit a dead process's
+  total. Without the feature or without privilege it is a silent no-op and the
+  socket-level view is used — never fabricated. Building the probe needs a nightly
+  toolchain with `rust-src` and `bpf-linker`; the arch is derived automatically so
+  it works on x86_64 and aarch64. See `src-tauri/ebpf/`. (First `--features ebpf`
+  build on a cold cache: if the nested probe build stalls fetching deps, run
+  `cd src-tauri/ebpf && cargo fetch` once beforehand.)
 
 ### External baselines
 - **LLM leaderboard ranks** fetched live from the Arena community mirror and

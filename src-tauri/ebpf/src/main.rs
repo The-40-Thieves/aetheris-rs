@@ -14,14 +14,29 @@
 
 use aya_ebpf::{
     helpers::bpf_get_current_pid_tgid,
-    macros::{kprobe, map},
+    macros::{kprobe, map, tracepoint},
     maps::HashMap,
-    programs::ProbeContext,
+    programs::{ProbeContext, TracePointContext},
 };
 
 /// tgid (process id) -> cumulative egress payload bytes.
 #[map]
 static EGRESS_BYTES: HashMap<u32, u64> = HashMap::with_max_entries(16384, 0);
+
+/// Evict a process's entry when it exits, so a recycled PID can never inherit a
+/// dead process's cumulative total (and the map can't fill up over uptime). The
+/// tracepoint fires per-thread; we only evict when the thread-group leader exits
+/// (pid == tgid), i.e. the process itself is going away.
+#[tracepoint]
+pub fn sched_process_exit(_ctx: TracePointContext) -> u32 {
+    let id = bpf_get_current_pid_tgid();
+    let tgid = (id >> 32) as u32;
+    let pid = id as u32;
+    if tgid == pid {
+        let _ = EGRESS_BYTES.remove(&tgid);
+    }
+    0
+}
 
 #[kprobe]
 pub fn tcp_sendmsg(ctx: ProbeContext) -> u32 {

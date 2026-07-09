@@ -50,7 +50,11 @@ pub fn per_process_rollup(top_n: usize) -> Vec<serde_json::Value> {
 
 #[cfg(feature = "ebpf")]
 mod imp {
-    use aya::{maps::HashMap as AyaHashMap, programs::KProbe, Ebpf};
+    use aya::{
+        maps::HashMap as AyaHashMap,
+        programs::{KProbe, TracePoint},
+        Ebpf,
+    };
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -97,6 +101,16 @@ mod imp {
                 .try_into()?;
             prog.load()?;
             prog.attach(name, 0)?;
+        }
+        // Evict per-process totals on process exit (prevents PID-reuse
+        // misattribution and unbounded map growth).
+        {
+            let prog: &mut TracePoint = bpf
+                .program_mut("sched_process_exit")
+                .ok_or("program sched_process_exit missing from object")?
+                .try_into()?;
+            prog.load()?;
+            prog.attach("sched", "sched_process_exit")?;
         }
         Ok(bpf)
     }
