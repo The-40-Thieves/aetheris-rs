@@ -4,193 +4,165 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Aetheris God-Tier Telemetry</title>
+    <title>Aetheris — Instrument Deck</title>
   </head>
   <body>
-    <div class="app-container">
-      <header class="glass-panel">
-        <div class="header-content">
-          <h1>Aetheris <span class="accent-text">Telemetry</span></h1>
-          <div class="status-indicator">
-            <span class="pulse-dot"></span> System Live
+    <div class="deck">
+      <!-- ===== TOP BAR ===== -->
+      <div class="topbar">
+        <div class="wordmark">AETHERIS<span class="slash">///</span></div>
+        <div class="topmeta">
+          <span>HOST <b id="m-host">—</b></span>
+          <span id="m-os-wrap">OS <b id="m-os">—</b></span>
+          <span>UP <b id="m-uptime">—</b></span>
+          <span>K <b id="m-kernel">—</b></span>
+        </div>
+        <div class="spacer"></div>
+        <div class="legend"><span class="g">live</span><span class="n">unavailable</span><span class="l">needs link</span></div>
+        <div class="unlinked-chip hidden" id="setup-chip" title="Data sources that need a one-time setup step">
+          <span>◆</span><span class="lbl">Setup</span><span class="cnt" id="setup-count">0</span>
+        </div>
+        <div class="alert-lamp ok" id="alert-lamp" title="Faults needing attention">
+          <span class="lbl">Attention</span><span class="cnt" id="alert-count">0</span>
+        </div>
+        <div class="live"><span class="dot"></span>LIVE <span id="clock" class="num accent">—</span></div>
+      </div>
+
+      <!-- ===== VITALS STRIP ===== -->
+      <div class="vitals">
+        <!-- CPU -->
+        <div class="inst">
+          <div class="head"><span class="lbl">CPU load</span><span class="sub num" id="cpu-coren">—</span></div>
+          <div class="big num"><span id="cpu-val">—</span><span class="sub">%</span></div>
+          <div class="cores" id="cpu-cores"></div>
+          <canvas id="cpu-spark" height="30" style="width:100%"></canvas>
+        </div>
+        <!-- Thermal -->
+        <div class="inst">
+          <div class="lbl">Thermal</div>
+          <div class="instrow">
+            <canvas id="therm-gauge" width="72" height="60"></canvas>
+            <div>
+              <div class="big med num"><span id="therm-val">—</span><span class="sub">°C</span></div>
+              <div class="sub" id="therm-meta">—</div>
+            </div>
           </div>
         </div>
-      </header>
+        <!-- Memory -->
+        <div class="inst">
+          <div class="head"><span class="lbl">Memory</span><span class="sub num" id="mem-pct">—</span></div>
+          <div class="big med num" id="mem-val">—</div>
+          <div class="membar"><i class="u" id="mem-bar" style="width:0%"></i></div>
+          <div class="instrow" style="margin-top:6px"><span class="lbl">Swap</span><span class="sub num" id="swap-val">—</span></div>
+          <div class="membar"><i class="sw" id="swap-bar" style="width:0%"></i></div>
+        </div>
+        <!-- Battery (rendered only when present) -->
+        <div class="inst hidden" id="battery-cell">
+          <div class="head"><span class="lbl">Battery · SOH</span><span class="sub num" id="batt-charge">—</span></div>
+          <div class="big med num"><span id="batt-soh">—</span><span class="sub">%</span></div>
+          <div class="sub" id="batt-meta">—</div>
+        </div>
+        <!-- SSD endurance / RUL -->
+        <div class="inst">
+          <div class="lbl">SSD endurance · RUL</div>
+          <div class="instrow">
+            <canvas id="ssd-dial" width="72" height="62"></canvas>
+            <div>
+              <div class="big med num"><span id="ssd-val">—</span><span class="sub">%</span></div>
+              <div class="sub" id="ssd-eol">—</div>
+              <div class="sub" id="ssd-written">—</div>
+            </div>
+          </div>
+        </div>
+        <!-- Network -->
+        <div class="inst">
+          <div class="lbl">Network I/O</div>
+          <div class="big sm num" style="margin-top:4px">↓ <span id="net-rx">—</span></div>
+          <div class="num" style="font-size:16px;color:var(--muted)">↑ <span id="net-tx">—</span></div>
+          <canvas id="net-spark" height="26" style="width:100%;margin-top:6px"></canvas>
+        </div>
+        <!-- Egress accounting -->
+        <div class="inst">
+          <div class="lbl">Egress accounting</div>
+          <div style="margin-top:6px"><span class="badge b-mut" id="egress-mode-badge">—</span></div>
+          <div class="big sm num" style="margin-top:8px" id="egress-total">—</div>
+          <div class="sub" id="egress-cell-meta">—</div>
+        </div>
+      </div>
 
-      <main class="dashboard-grid">
-        <!-- Overview Panel -->
-        <section class="glass-panel card">
-          <h2>Overview</h2>
-          <div id="overview-content" class="metric-group">
-            <div class="metric">
-              <span class="label">CPU Usage</span>
-              <span class="value" id="cpu-usage">--%</span>
-              <div class="progress-bar"><div class="fill" id="cpu-bar"></div></div>
-            </div>
-            <div class="metric">
-              <span class="label">Memory</span>
-              <span class="value" id="mem-usage">-- GB / -- GB</span>
-              <div class="progress-bar"><div class="fill" id="mem-bar"></div></div>
-            </div>
-            <div class="metric">
-              <span class="label">SWAP</span>
-              <span class="value" id="swap-usage">-- GB / -- GB</span>
-              <div class="progress-bar"><div class="fill" id="swap-bar" style="background-color: var(--warning)"></div></div>
-            </div>
-            <div class="metric">
-              <span class="label">Network I/O</span>
-              <span class="value" id="net-io">↓ 0 B/s | ↑ 0 B/s</span>
-            </div>
-            <div class="metric">
-              <span class="label">System Uptime</span>
-              <span class="value" id="uptime">--:--:--</span>
-            </div>
-          </div>
-        </section>
-        <!-- Processes & Sensors Panel -->
-        <section class="glass-panel card col-span-2">
-          <h2>Processes & Sensors</h2>
-          <div class="dashboard-grid" style="padding-right: 0; gap: 1rem;">
-              <div class="metric-group">
-                <h3>Top Processes (CPU)</h3>
-                <div class="table-container">
-                  <table>
-                    <thead>
-                      <tr><th>PID</th><th>Name</th><th>CPU %</th><th>Mem %</th><th>Disk I/O</th></tr>
-                    </thead>
-                    <tbody id="processes-body">
-                      <tr><td colspan="5" class="empty-state">Loading processes...</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div class="metric-group">
-                <h3>Hardware Sensors (Temp & Fans)</h3>
-                <div class="table-container scrollable">
-                  <table>
-                    <tbody id="sensors-body">
-                      <tr><td class="empty-state">Loading sensors...</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-          </div>
-        </section>
-
-        <!-- GPU & AI Panel -->
-        <section class="glass-panel card">
-          <h2>GPU & AI Telemetry</h2>
-          <div id="gpu-content" class="metric-group scrollable">
-            <div class="empty-state">Detecting GPUs...</div>
-          </div>
-          <div class="divider"></div>
-          <h3>AI Proxy Observability & Evals</h3>
-          <div class="metric-group">
-             <div class="metric highlight">
-                <span class="label">Last Inference Speed</span>
-                <span class="value" id="ai-tps">No traffic yet</span>
-             </div>
-             <div class="metric">
-                <span class="label" id="ai-proxy-status">Proxy idle</span>
-             </div>
-          </div>
-          <div class="divider"></div>
-          <h3>LMSYS Chatbot Arena Ranks</h3>
-          <div class="table-container">
+      <!-- ===== MAIN DECK ===== -->
+      <div class="grid">
+        <!-- Processes -->
+        <div class="panel">
+          <div class="ph"><span class="t">Processes</span><span class="r" id="proc-meta">—</span></div>
+          <div class="body">
             <table>
-               <tbody id="ai-evals-body">
-                  <tr><td class="empty-state">Loading LLM Stats...</td></tr>
-               </tbody>
+              <thead><tr><th>PID</th><th>Proc</th><th class="r">CPU</th><th>Load</th><th class="r">Mem</th></tr></thead>
+              <tbody id="proc-body"></tbody>
             </table>
           </div>
-        </section>
+        </div>
 
-        <!-- Storage & RUL Panel -->
-        <section class="glass-panel card">
-          <h2>Storage & Endurance (RUL)</h2>
-          <div id="storage-content" class="metric-group scrollable">
-             <div class="empty-state">Scanning Disks...</div>
-          </div>
-        </section>
-
-        <!-- Battery Panel -->
-        <section class="glass-panel card">
-          <h2>Power & Battery</h2>
-          <div id="battery-content" class="metric-group scrollable">
-             <div class="empty-state">No Battery Detected</div>
-          </div>
-        </section>
-
-        <!-- Hybrid Topology Panel -->
-        <section class="glass-panel card col-span-2">
-          <h2>Egress Topology & Cost <span class="label" id="egress-accounting" style="font-size:0.7rem"></span></h2>
-          <div id="egress-by-process" class="metric-group" style="margin-bottom:0.75rem"></div>
-          <div class="table-container">
-            <table id="egress-table">
-              <thead>
-                <tr>
-                  <th>Process</th>
-                  <th>Destination</th>
-                  <th>Data Sent</th>
-                  <th>Provider</th>
-                  <th>Cost Estimate</th>
-                </tr>
-              </thead>
-              <tbody id="egress-body">
-                <tr><td colspan="5" class="empty-state">Scanning Network...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Containers Panel -->
-        <section class="glass-panel card col-span-2">
-          <h2>Containers</h2>
-          <div class="table-container scrollable">
+        <!-- Egress topology + cost -->
+        <div class="panel">
+          <div class="ph"><span class="t">Egress topology · cost</span><span class="r"><span class="badge b-mut" id="egress-badge">—</span></span></div>
+          <div class="body">
+            <div class="lbl" style="padding:2px 10px 4px">Top egress by provider</div>
+            <div id="provbars"></div>
+            <div style="height:8px"></div>
             <table>
-              <thead>
-                <tr><th>Name / Image</th><th>State</th><th>CPU%</th><th>Mem</th><th>Net I/O</th><th>Restarts</th><th>Uptime</th><th>Update</th></tr>
-              </thead>
-              <tbody id="containers-body">
-                <tr><td colspan="8" class="empty-state">Scanning containers…</td></tr>
-              </tbody>
+              <thead><tr><th>Proc</th><th>Destination</th><th class="r">Sent</th><th>Provider</th><th class="r">Cost</th></tr></thead>
+              <tbody id="egress-body"></tbody>
             </table>
           </div>
-        </section>
+        </div>
 
-        <!-- External Baselines Panel (DORA & Pricing) -->
-        <section class="glass-panel card col-span-2">
-          <h2>External Benchmarks (DORA & Pricing)</h2>
-          <div class="dashboard-grid" style="padding-right: 0; gap: 1rem;">
-              <div class="metric-group">
-                <h3>DORA Metrics (2026 Tiers)</h3>
-                <div class="table-container">
-                  <table>
-                    <thead>
-                      <tr><th>Metric</th><th>Local Sync</th><th>Elite Target</th></tr>
-                    </thead>
-                    <tbody id="dora-body">
-                      <tr><td colspan="3" class="empty-state">Loading DORA...</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div class="metric-group">
-                <h3>Observability SaaS Pricing (Gartner/G2)</h3>
-                <div class="table-container">
-                  <table>
-                    <thead>
-                      <tr><th>Platform</th><th>Tier</th><th>Est. Cost/mo</th></tr>
-                    </thead>
-                    <tbody id="pricing-body">
-                      <tr><td colspan="3" class="empty-state">Loading Pricing...</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+        <!-- Containers -->
+        <div class="panel">
+          <div class="ph"><span class="t">Containers</span><span class="r" id="cont-meta">—</span></div>
+          <div class="body">
+            <table>
+              <thead><tr><th>Name</th><th>State</th><th class="r">CPU</th><th class="r">Mem</th><th class="r">RST</th><th>Upd</th></tr></thead>
+              <tbody id="cont-body"></tbody>
+            </table>
           </div>
-        </section>
-      </main>
+        </div>
+
+        <!-- ===== BOTTOM STRIP ===== -->
+        <div class="strip">
+          <!-- GPU · AI proxy -->
+          <div class="panel">
+            <div class="ph"><span class="t">GPU · AI proxy</span><span class="r"><span class="badge b-mut" id="aiproxy-badge">—</span></span></div>
+            <div class="body" style="padding:6px 4px">
+              <div id="gpu-rows"></div>
+              <div class="kv" id="aiproxy-row"><span class="k">AI proxy tok/s</span><span class="v num">—</span></div>
+              <div class="link-hint" id="aiproxy-hint" style="display:none"><span class="glyph">◆</span><span id="aiproxy-hint-text"></span></div>
+              <div class="lbl" style="margin:8px 10px 3px">Arena · <span id="arena-asof">—</span></div>
+              <div id="arena-body"></div>
+            </div>
+          </div>
+
+          <!-- DORA -->
+          <div class="panel">
+            <div class="ph"><span class="t">DORA · this repo</span><span class="r"><span class="badge b-mut" id="dora-badge">—</span></span></div>
+            <div class="body" style="padding:6px 4px">
+              <div class="kv" id="dora-deploy"><span class="k">Deploy freq</span><span class="v num">—</span></div>
+              <div class="kv" id="dora-lead"><span class="k">Lead time</span><span class="v num">—</span></div>
+              <div class="kv" id="dora-cfr"><span class="k">Change-fail rate</span><span class="v num">—</span></div>
+              <div class="kv" id="dora-mttr"><span class="k">MTTR</span><span class="v num">—</span></div>
+              <div class="link-hint" id="dora-hint" style="display:none"><span class="glyph">◆</span><span id="dora-hint-text"></span></div>
+            </div>
+          </div>
+
+          <!-- Observability pricing (reference) -->
+          <div class="panel">
+            <div class="ph"><span class="t">Observability cost — reference</span><span class="r">static</span></div>
+            <div class="body" style="padding:6px 4px">
+              <table><tbody id="pricing-body"></tbody></table>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/main.js"></script>
   </body>
