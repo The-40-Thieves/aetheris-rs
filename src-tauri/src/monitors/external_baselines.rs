@@ -317,8 +317,11 @@ fn github_token() -> Option<String> {
 async fn fetch_ci_dora(client: &reqwest::Client) -> Option<(String, String, usize)> {
     let (owner, repo) = github_repo()?;
     let token = github_token()?;
+    // All recent completed runs (across branches) — a real CI-health signal that
+    // has data as soon as any workflow has run, not just after a default-branch
+    // deploy. Labeled "runs" in the output, not "deploys".
     let url = format!(
-        "https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=100&branch=master&status=completed"
+        "https://api.github.com/repos/{owner}/{repo}/actions/runs?per_page=100&status=completed"
     );
     let resp = client
         .get(&url)
@@ -417,6 +420,18 @@ mod tests {
         assert_eq!(mttr2, "0 (no failures)");
         // No runs -> honest n/a, never fabricated.
         assert_eq!(dora_from_runs(&[]).2, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "live: hits the GitHub Actions API for this repo"]
+    async fn ci_dora_live_probe() {
+        let client = reqwest::Client::new();
+        let r = fetch_ci_dora(&client).await;
+        eprintln!("ci_dora = {r:?}");
+        let (cfr, mttr, n) = r.expect("expected >=1 completed CI run on this repo");
+        eprintln!("CFR={cfr}  MTTR={mttr}  runs={n}");
+        assert!(n >= 1);
+        assert!(cfr.contains('%'));
     }
 
     #[tokio::test]
