@@ -225,11 +225,40 @@ async fn collect_via_cli() -> Option<Vec<Container>> {
 fn cpu_percent(cpu_total: u64, precpu_total: u64, system: u64, presystem: u64, online_cpus: u64) -> Option<f64> {
     let cpu_delta = cpu_total.checked_sub(precpu_total)? as f64;
     let system_delta = system.checked_sub(presystem)? as f64;
-    if system_delta <= 0.0 || cpu_delta < 0.0 {
+    if system_delta <= 0.0 {
         return None;
     }
     let cpus = if online_cpus == 0 { 1 } else { online_cpus } as f64;
     Some(cpu_delta / system_delta * cpus * 100.0)
+}
+
+/// Format a single port mapping the way `docker ps` does, e.g.
+/// "0.0.0.0:8080->80/tcp" (published) or "80/tcp" (unpublished).
+fn format_port(p: &bollard::models::PortSummary) -> String {
+    let typ = p.typ.map(|t| t.to_string()).unwrap_or_default();
+    match (p.ip.as_deref(), p.public_port) {
+        (Some(ip), Some(pub_port)) => format!("{ip}:{pub_port}->{}/{typ}", p.private_port),
+        (None, Some(pub_port)) => format!("{pub_port}->{}/{typ}", p.private_port),
+        _ => format!("{}/{typ}", p.private_port),
+    }
+}
+
+/// A simple, honest relative-time string ("3h 20m", "5d") — need not byte-match
+/// docker's exact wording.
+fn format_uptime(secs: i64) -> String {
+    let secs = secs.max(0) as u64;
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let minutes = (secs % 3_600) / 60;
+    if days > 0 {
+        format!("{days}d")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{secs}s")
+    }
 }
 
 /// Collect containers via the bollard Docker Engine API (socket), used when
@@ -257,6 +286,17 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
     for s in summaries {
         let id = s.id.clone().unwrap_or_default();
         let sid = short_id(&id);
+        let ports = s
+            .ports
+            .as_ref()
+            .map(|ps| ps.iter().map(format_port).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        let created_at = s
+            .created
+            .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+
         let mut c = Container {
             id: sid,
             name: s
@@ -269,7 +309,19 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
             state: s.state.map(|st| st.as_ref().to_string()).unwrap_or_default(),
             status: s.status.clone().unwrap_or_default(),
             health: "none".to_string(),
+            ports,
+            created_at,
             ..Default::default()
+        };
+
+        // Relative uptime only makes sense for a currently-running container;
+        // never fabricate one for a stopped/exited container.
+        c.uptime = if c.state == "running" {
+            s.created
+                .map(|created_secs| format_uptime(chrono::Utc::now().timestamp().saturating_sub(created_secs)))
+                .unwrap_or_default()
+        } else {
+            String::new()
         };
 
         // Restart count + health via inspect.
@@ -300,15 +352,37 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
         );
         if let Some(Ok(st)) = stream.next().await {
             if let (Some(cpu), Some(pre)) = (st.cpu_stats.as_ref(), st.precpu_stats.as_ref()) {
-                let cpu_total = cpu.cpu_usage.as_ref().and_then(|u| u.total_usage).unwrap_or(0);
-                let precpu_total = pre.cpu_usage.as_ref().and_then(|u| u.total_usage).unwrap_or(0);
-                let system = cpu.system_cpu_usage.unwrap_or(0);
-                let presystem = pre.system_cpu_usage.unwrap_or(0);
-                let online_cpus = cpu.online_cpus.unwrap_or(0) as u64;
-                c.cpu_percent = cpu_percent(cpu_total, precpu_total, system, presystem, online_cpus);
+                let cpu_usage = cpu.cpu_usage.as_ref();
+                let precpu_usage = pre.cpu_usage.as_ref();
+                let cpu_total = cpu_usage.and_then(|u| u.total_usage);
+                let precpu_total = precpu_usage.and_then(|u| u.total_usage);
+                let system = cpu.system_cpu_usage;
+                let presystem = pre.system_cpu_usage;
+                // Only compute cpu_percent when every input sample is actually
+                // present; never fabricate a 0% from a missing field.
+                if let (Some(cpu_total), Some(precpu_total), Some(system), Some(presystem)) =
+                    (cpu_total, precpu_total, system, presystem)
+                {
+                    let online_cpus = cpu.online_cpus.map(|n| n as u64).unwrap_or_else(|| {
+                        cpu_usage
+                            .and_then(|u| u.percpu_usage.as_ref())
+                            .map(|v| v.len() as u64)
+                            .unwrap_or(1)
+                    });
+                    c.cpu_percent = cpu_percent(cpu_total, precpu_total, system, presystem, online_cpus);
+                }
             }
             if let Some(mem) = st.memory_stats.as_ref() {
-                c.mem_used = mem.usage.map(|u| u as f64);
+                // docker stats reports usage minus reclaimable page cache, not
+                // raw cgroup usage: cgroup v2 exposes "inactive_file", v1
+                // exposes "cache". Fall back to raw usage if neither is present.
+                c.mem_used = mem.usage.map(|usage| {
+                    let cache = mem.stats.as_ref().and_then(|m| {
+                        m.get("inactive_file").or_else(|| m.get("cache")).copied()
+                    });
+                    let mem_used = cache.and_then(|c| usage.checked_sub(c)).unwrap_or(usage);
+                    mem_used as f64
+                });
                 c.mem_limit = mem.limit.map(|l| l as f64);
                 if let (Some(u), Some(l)) = (c.mem_used, c.mem_limit) {
                     if l > 0.0 {
@@ -319,6 +393,25 @@ async fn collect_via_bollard() -> Option<Vec<Container>> {
             if let Some(nets) = st.networks.as_ref() {
                 c.net_rx = Some(nets.values().filter_map(|n| n.rx_bytes).sum::<u64>() as f64);
                 c.net_tx = Some(nets.values().filter_map(|n| n.tx_bytes).sum::<u64>() as f64);
+            }
+            c.pids = st.pids_stats.as_ref().and_then(|p| p.current);
+            if let Some(entries) = st
+                .blkio_stats
+                .as_ref()
+                .and_then(|b| b.io_service_bytes_recursive.as_ref())
+            {
+                let mut read_sum = 0u64;
+                let mut write_sum = 0u64;
+                for e in entries {
+                    let val = e.value.unwrap_or(0);
+                    match e.op.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                        Some("read") => read_sum += val,
+                        Some("write") => write_sum += val,
+                        _ => {}
+                    }
+                }
+                c.block_read = Some(read_sum as f64);
+                c.block_write = Some(write_sum as f64);
             }
         }
         out.push(c);
@@ -408,6 +501,10 @@ mod tests {
         for x in c.iter().take(5) {
             eprintln!("{} | {} | {} | cpu={:?} mem={:?} restarts={:?}",
                 x.name, x.state, x.health, x.cpu_percent, x.mem_used, x.restart_count);
+            eprintln!(
+                "    pids={:?} block_read={:?} block_write={:?} ports={:?} created_at={:?} uptime={:?}",
+                x.pids, x.block_read, x.block_write, x.ports, x.created_at, x.uptime
+            );
         }
         assert!(!c.is_empty());
     }
