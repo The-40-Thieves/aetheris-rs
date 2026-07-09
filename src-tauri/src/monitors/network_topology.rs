@@ -85,6 +85,19 @@ mod linux {
             }
             out.push(to_json(&c, fallback));
         }
+
+        // If the eBPF probe is active, annotate each connection with the owning
+        // process's TRUE cumulative egress bytes (across all its sockets, incl.
+        // closed ones) — something the per-socket ss view cannot provide.
+        if let Some(per_pid) = crate::monitors::ebpf_egress::snapshot() {
+            for conn in &mut out {
+                if let Some(pid) = conn.get("pid").and_then(|p| p.as_u64()) {
+                    if let Some(&total) = per_pid.get(&(pid as u32)) {
+                        conn["process_egress_bytes"] = json!(total);
+                    }
+                }
+            }
+        }
         out
     }
 

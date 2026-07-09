@@ -32,6 +32,15 @@ async-stream = "0.3"
 futures-util = "0.3"
 plist = "1"
 bollard = "0.21"
+# eBPF egress byte-accounting (Linux, opt-in). Off by default so the normal
+# cross-platform stable build is unaffected; enable with `--features ebpf`.
+aya = { version = "0.14", optional = true }
+
+[features]
+# Compile + embed the eBPF egress probe and enable the runtime loader.
+# Requires: Linux, a nightly toolchain with rust-src, and bpf-linker installed.
+# Loading the probe additionally requires root / CAP_BPF + CAP_NET_ADMIN.
+ebpf = ["dep:aya"]
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }

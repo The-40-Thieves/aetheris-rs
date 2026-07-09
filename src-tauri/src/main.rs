@@ -302,7 +302,14 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
         }).collect::<Vec<_>>())
     });
     let egress = cached(&state.caches.egress, TTL_EGRESS, || {
-        json!(monitors::network_topology::get_egress_topology(&state.db))
+        json!({
+            "topology": monitors::network_topology::get_egress_topology(&state.db),
+            // True per-PID cumulative egress bytes from the eBPF probe (incl.
+            // closed/short-lived sockets and daemons with no tracked connection).
+            // Empty when the probe isn't loaded; the frontend falls back gracefully.
+            "byProcess": monitors::ebpf_egress::per_process_rollup(12),
+            "accounting": if monitors::ebpf_egress::is_active() { "ebpf" } else { "sockets" },
+        })
     });
     let baselines = cached(&state.caches.baselines, TTL_BASELINES, || {
         monitors::external_baselines::get_external_baselines(&state.db)
@@ -380,7 +387,9 @@ fn get_stats(state: tauri::State<AppState>) -> serde_json::Value {
                     "lastTokensPerSec": state.db.latest_metric("ai_tokens_per_sec"),
                     "samples": state.db.count_metric("ai_tokens_per_sec")
                 },
-                "egressTopology": egress,
+                "egressTopology": egress["topology"].clone(),
+                "egressByProcess": egress["byProcess"].clone(),
+                "egressAccounting": egress["accounting"].clone(),
                 "externalBaselines": baselines,
                 "plur": {},
                 "containers": monitors::containers::get_container_stats(),
@@ -461,6 +470,10 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(20)).await;
                 }
             });
+            // Try to load the eBPF egress probe once (no-op without the `ebpf`
+            // feature or without root/CAP_BPF). When active it upgrades egress
+            // accounting to true per-PID cumulative bytes.
+            monitors::ebpf_egress::try_load();
             Ok(())
         })
         .manage(AppState {

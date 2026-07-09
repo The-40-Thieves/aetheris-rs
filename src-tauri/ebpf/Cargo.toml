@@ -1,0 +1,21 @@
+[package]
+name = "aetheris-ebpf"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+aya-ebpf = "0.2.1"
+
+[[bin]]
+name = "aetheris-ebpf"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 3
+debug = false
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
