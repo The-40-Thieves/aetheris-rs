@@ -76,7 +76,10 @@ mod linux {
                 c.pid = Some(pid);
                 c.process = read_comm(pid);
             }
-            if let Some(&(sent, acked)) = ss_bytes.get(&c.remote_key).or_else(|| ss_bytes.get(&c.local_key)) {
+            // Join on the full 4-tuple (local|remote) so multiple sockets to the
+            // same server (connection pools) each get their own byte counts.
+            let tuple_key = format!("{}|{}", c.local_key, c.remote_key);
+            if let Some(&(sent, acked)) = ss_bytes.get(&tuple_key) {
                 c.bytes_sent = Some(sent);
                 c.bytes_acked = Some(acked);
             }
@@ -203,34 +206,42 @@ mod linux {
     /// the kernel tcp_info. Returns empty if `ss` is unavailable/unparseable, in
     /// which case byte counts stay `null` rather than being invented.
     fn collect_ss_bytes() -> HashMap<String, (u64, u64)> {
-        let mut map = HashMap::new();
         let output = match std::process::Command::new("ss").args(["-tinH"]).output() {
             Ok(o) if o.status.success() => o.stdout,
-            _ => return map,
+            _ => return HashMap::new(),
         };
-        let text = String::from_utf8_lossy(&output);
+        parse_ss_output(&String::from_utf8_lossy(&output))
+    }
+
+    /// Parse `ss -tinH` into a map keyed by the full "local|remote" 4-tuple ->
+    /// (bytes_sent, bytes_acked). Keying by the whole tuple (not just the peer)
+    /// keeps distinct sockets to the same server from overwriting each other.
+    fn parse_ss_output(text: &str) -> HashMap<String, (u64, u64)> {
+        let mut map = HashMap::new();
         // Default `ss` format: a header line (State Recv-Q Send-Q Local Peer ...)
         // followed by a whitespace-indented info line carrying "bytes_sent:N".
-        let mut current_peer: Option<String> = None;
+        let mut current_key: Option<String> = None;
         for line in text.lines() {
             if line.starts_with(char::is_whitespace) {
                 // Continuation info line for the current connection.
-                if let Some(peer) = &current_peer {
-                    let sent = extract_kv(line, "bytes_sent:");
-                    let acked = extract_kv(line, "bytes_acked:");
-                    if let Some(s) = sent {
-                        map.insert(peer.clone(), (s, acked.unwrap_or(0)));
+                if let Some(key) = &current_key {
+                    if let Some(s) = extract_kv(line, "bytes_sent:") {
+                        map.insert(key.clone(), (s, extract_kv(line, "bytes_acked:").unwrap_or(0)));
                     }
                 }
             } else {
-                // Header line: columns State Recv-Q Send-Q Local Peer.
+                // Header line: State Recv-Q Send-Q Local Peer.
                 let cols: Vec<&str> = line.split_whitespace().collect();
-                current_peer = cols.get(4).map(|s| normalize_peer(s));
+                current_key = match (cols.get(3), cols.get(4)) {
+                    (Some(local), Some(peer)) => {
+                        Some(format!("{}|{}", normalize_peer(local), normalize_peer(peer)))
+                    }
+                    _ => None,
+                };
                 // Some ss builds print info inline on the header line too.
-                if let Some(peer) = &current_peer {
+                if let Some(key) = &current_key {
                     if let Some(s) = extract_kv(line, "bytes_sent:") {
-                        let acked = extract_kv(line, "bytes_acked:").unwrap_or(0);
-                        map.insert(peer.clone(), (s, acked));
+                        map.insert(key.clone(), (s, extract_kv(line, "bytes_acked:").unwrap_or(0)));
                     }
                 }
             }
@@ -339,6 +350,22 @@ mod linux {
         fn normalize_peer_strips_ipv6_brackets() {
             assert_eq!(normalize_peer("[2606:4700::1]:443"), "2606:4700::1:443");
             assert_eq!(normalize_peer("140.82.112.4:443"), "140.82.112.4:443");
+        }
+
+        #[test]
+        fn ss_bytes_keyed_by_full_tuple_no_pool_collision() {
+            // Two pooled sockets to the SAME server from different local ports
+            // must keep their own byte counts (regression: peer-only keying
+            // collapsed them to the last value).
+            let sample = "\
+ESTAB 0 0 10.0.0.1:50001 140.82.112.4:443
+\t bbr rtt:5 bytes_sent:100 bytes_acked:100 segs_out:3
+ESTAB 0 0 10.0.0.1:50002 140.82.112.4:443
+\t bbr rtt:5 bytes_sent:200 bytes_acked:200 segs_out:5";
+            let map = parse_ss_output(sample);
+            assert_eq!(map.len(), 2, "two distinct sockets, two keys");
+            assert_eq!(map.get("10.0.0.1:50001|140.82.112.4:443"), Some(&(100, 100)));
+            assert_eq!(map.get("10.0.0.1:50002|140.82.112.4:443"), Some(&(200, 200)));
         }
 
         #[test]
